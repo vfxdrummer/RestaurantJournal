@@ -1,4 +1,4 @@
-# Food Journal — MVP
+# Restaurant Journal — MVP
 
 An iOS app that scans your camera roll to auto-detect restaurant visits, lets you annotate them with voice notes, and answers natural-language questions about your food history using the Claude API.
 
@@ -15,9 +15,9 @@ An iOS app that scans your camera roll to auto-detect restaurant visits, lets yo
 
 ## Setup
 
-1. **Create an Xcode project** — File → New → Project → iOS App → SwiftUI + SwiftData. Name it `FoodJournal`. Minimum deployment target: iOS 17.
-2. **Delete** the default `ContentView.swift`, `Item.swift`, and `FoodJournalApp.swift` that Xcode generates.
-3. **Drag** the contents of `FoodJournal/` (this repo) into your project — make sure "Copy items if needed" is checked.
+1. **Create an Xcode project** — File → New → Project → iOS App → SwiftUI + SwiftData. Name it `RestaurantJournal`. Minimum deployment target: iOS 17.
+2. **Delete** the default `ContentView.swift`, `Item.swift`, and `RestaurantJournalApp.swift` that Xcode generates.
+3. **Drag** the contents of `RestaurantJournal/` (this repo) into your project — make sure "Copy items if needed" is checked.
 4. **Merge the Info.plist** — Xcode 15+ manages usage descriptions in the target settings under "Info" tab. Either paste the plist entries there or use the `Info.plist` file included here.
 5. **Enable Background Modes** capability → Location updates + Background fetch.
 6. **Set the API key** — for development, edit your scheme (Product → Scheme → Edit Scheme → Run → Arguments → Environment Variables) and add `ANTHROPIC_API_KEY` = your key. For production, move this to Keychain and ideally a backend relay so the key never lives on-device.
