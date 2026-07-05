@@ -147,7 +147,7 @@ struct ShareRecommendationView: View {
 
     // MARK: - Actions
 
-    private var hasAPIKey: Bool { ClaudeClient.fromEnvironment() != nil }
+    private var hasAPIKey: Bool { LLMProvider.selected.makeClient() != nil }
 
     private func generate() async {
         isGenerating = true

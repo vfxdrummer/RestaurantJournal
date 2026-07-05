@@ -2,22 +2,69 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>NSPhotoLibraryUsageDescription</key>
-    <string>Food Journal scans your photo library to detect restaurant visits from your food photos.</string>
-    <key>NSPhotoLibraryAddUsageDescription</key>
-    <string>Food Journal may save annotated food photos to your library.</string>
-    <key>NSLocationWhenInUseUsageDescription</key>
-    <string>Food Journal uses your location to identify the restaurant you're currently at.</string>
-    <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-    <string>Food Journal uses your location in the background to detect restaurant visits automatically.</string>
-    <key>NSMicrophoneUsageDescription</key>
-    <string>Food Journal records voice notes about your restaurant experiences.</string>
-    <key>NSSpeechRecognitionUsageDescription</key>
-    <string>Food Journal transcribes your voice notes so you can search them later.</string>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleDisplayName</key>
+    <string>Restaurant Journal</string>
+    <key>CFBundleExecutable</key>
+    <string>$(EXECUTABLE_NAME)</string>
+    <key>CFBundleIdentifier</key>
+    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>$(PRODUCT_NAME)</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>$(MARKETING_VERSION)</string>
+    <key>CFBundleVersion</key>
+    <string>$(CURRENT_PROJECT_VERSION)</string>
+    <key>LSRequiresIPhoneOS</key>
+    <true/>
+    <key>UIApplicationSceneManifest</key>
+    <dict>
+        <key>UIApplicationSupportsMultipleScenes</key>
+        <true/>
+    </dict>
+    <key>UILaunchScreen</key>
+    <dict>
+        <key>UIColorName</key>
+        <string>BrandCream</string>
+        <key>UIImageName</key>
+        <string>LaunchLogo</string>
+        <key>UIImageRespectsSafeAreaInsets</key>
+        <true/>
+    </dict>
+    <key>UISupportedInterfaceOrientations</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+        <string>UIInterfaceOrientationLandscapeLeft</string>
+        <string>UIInterfaceOrientationLandscapeRight</string>
+    </array>
+    <key>UISupportedInterfaceOrientations~ipad</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+        <string>UIInterfaceOrientationPortraitUpsideDown</string>
+        <string>UIInterfaceOrientationLandscapeLeft</string>
+        <string>UIInterfaceOrientationLandscapeRight</string>
+    </array>
     <key>UIBackgroundModes</key>
     <array>
-        <string>location</string>
         <string>fetch</string>
+        <string>location</string>
     </array>
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>Restaurant Journal scans your photo library to detect restaurant visits from your food photos.</string>
+    <key>NSPhotoLibraryAddUsageDescription</key>
+    <string>Restaurant Journal may save annotated food photos to your library.</string>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>Restaurant Journal uses your location to identify the restaurant you're currently at.</string>
+    <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+    <string>Restaurant Journal uses your location in the background to detect restaurant visits automatically.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Restaurant Journal records voice notes about your restaurant experiences.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>Restaurant Journal transcribes your voice notes so you can search them later.</string>
 </dict>
 </plist>

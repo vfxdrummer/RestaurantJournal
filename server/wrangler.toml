@@ -1,0 +1,16 @@
+name = "restaurant-journal-llm-proxy"
+main = "worker.js"
+compatibility_date = "2024-11-01"
+
+# Optional model overrides (defaults are set in worker.js).
+[vars]
+CLAUDE_MODEL = "claude-sonnet-4-6"
+OPENAI_MODEL = "gpt-4o-mini"
+
+# Per-IP rate limit (Cloudflare native). period must be 10 or 60 (seconds).
+# 12 requests / 60s per IP: far more than any human needs, but stops a script.
+[[unsafe.bindings]]
+name = "RATE_LIMITER"
+type = "ratelimit"
+namespace_id = "1001"
+simple = { limit = 12, period = 60 }

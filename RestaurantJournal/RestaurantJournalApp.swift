@@ -22,7 +22,7 @@ struct RestaurantJournalApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView()
+            AppRootView()
         }
         .modelContainer(sharedModelContainer)
     }

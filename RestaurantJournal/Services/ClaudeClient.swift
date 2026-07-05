@@ -1,7 +1,7 @@
 import Foundation
 
 /// Minimal client for the Anthropic Messages API, shared by journal features that call Claude.
-struct ClaudeClient {
+struct ClaudeClient: LLMCompleting {
     let apiKey: String
     var model: String = "claude-sonnet-4-6"
 

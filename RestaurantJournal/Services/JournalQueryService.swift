@@ -1,17 +1,14 @@
 import Foundation
 import SwiftData
 
-/// Sends structured visit data + a natural-language question to the Claude API.
+/// Sends structured visit data + a natural-language question to an LLM (Claude or ChatGPT).
 /// This is a straight structured-context approach (no vector DB) — appropriate at MVP scale.
 @MainActor
 final class JournalQueryService {
-    // TODO: Move to Keychain in production. For MVP dev, set here or via env.
-    private let apiKey: String
-    private let modelName: String
+    private let client: LLMCompleting
 
-    init(apiKey: String, modelName: String = "claude-sonnet-4-6") {
-        self.apiKey = apiKey
-        self.modelName = modelName
+    init(client: LLMCompleting) {
+        self.client = client
     }
 
     struct QueryResult {
@@ -39,7 +36,7 @@ final class JournalQueryService {
         Question: \(question)
         """
 
-        let answerText = try await callClaude(system: system, user: userMessage)
+        let answerText = try await client.complete(system: system, user: userMessage)
 
         // Parse referenced IDs
         let idIntegers = parseReferencedIDs(from: answerText)
@@ -97,38 +94,5 @@ final class JournalQueryService {
             .replacingOccurrences(of: "REFERENCED_IDS:", with: "")
             .trimmingCharacters(in: CharacterSet(charactersIn: " []"))
         return inner.split(separator: ",").compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
-    }
-
-    // MARK: - Claude API call
-
-    private func callClaude(system: String, user: String) async throws -> String {
-        var request = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
-        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-
-        let body: [String: Any] = [
-            "model": modelName,
-            "max_tokens": 1024,
-            "system": system,
-            "messages": [
-                ["role": "user", "content": user]
-            ]
-        ]
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-            let msg = String(data: data, encoding: .utf8) ?? "Unknown API error"
-            throw NSError(domain: "JournalQueryService", code: -1, userInfo: [NSLocalizedDescriptionKey: msg])
-        }
-
-        struct APIResponse: Decodable {
-            struct Block: Decodable { let type: String; let text: String? }
-            let content: [Block]
-        }
-        let decoded = try JSONDecoder().decode(APIResponse.self, from: data)
-        return decoded.content.compactMap { $0.text }.joined(separator: "\n")
     }
 }

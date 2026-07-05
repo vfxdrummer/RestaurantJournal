@@ -6,7 +6,7 @@ import Foundation
 enum RecommendationService {
 
     static func generateBlurb(placeName: String, address: String?, visits: [Visit], recipientNote: String) async -> String? {
-        guard let client = ClaudeClient.fromEnvironment() else { return nil }
+        guard let client = LLMProvider.selected.makeClient() else { return nil }
 
         let system = """
         You help the user recommend a restaurant they've personally been to, to a friend.
