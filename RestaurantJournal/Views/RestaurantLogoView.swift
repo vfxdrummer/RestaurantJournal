@@ -29,12 +29,20 @@ struct RestaurantLogoView: View {
     @Environment(\.modelContext) private var modelContext
     @State private var logo: UIImage?
 
+    /// Process-wide cache so a logo that's already been fetched renders instantly when a pin is
+    /// rebuilt (e.g. as the map re-clusters) — no fetch, no fallback flash.
+    private static let cache = NSCache<NSString, UIImage>()
+
     private var taskID: String { "\(host ?? "")|\(name ?? "")" }
+
+    /// Prefer the loaded image, but fall back to the cache so a freshly-created view shows the logo
+    /// on its very first render instead of flashing the placeholder.
+    private var displayImage: UIImage? { logo ?? Self.cache.object(forKey: taskID as NSString) }
 
     var body: some View {
         Group {
-            if let logo {
-                Image(uiImage: logo)
+            if let image = displayImage {
+                Image(uiImage: image)
                     .resizable()
                     .scaledToFit()
             } else {
@@ -48,8 +56,14 @@ struct RestaurantLogoView: View {
         .frame(width: size, height: size)
         .clipShape(RoundedRectangle(cornerRadius: size * 0.22))
         .task(id: taskID) {
-            logo = nil
-            logo = await EstablishmentLogoStore.logo(host: host, name: name, in: modelContext)
+            if let cached = Self.cache.object(forKey: taskID as NSString) {
+                logo = cached
+                return
+            }
+            if let loaded = await EstablishmentLogoStore.logo(host: host, name: name, in: modelContext) {
+                Self.cache.setObject(loaded, forKey: taskID as NSString)
+                logo = loaded
+            }
         }
     }
 }

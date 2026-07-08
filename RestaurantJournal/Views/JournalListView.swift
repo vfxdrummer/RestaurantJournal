@@ -2,6 +2,8 @@ import SwiftUI
 import SwiftData
 import UIKit
 
+enum JournalMode: Hashable { case list, map }
+
 struct JournalListView: View {
     @Environment(\.modelContext) private var modelContext
 
@@ -21,6 +23,7 @@ struct JournalListView: View {
     @State private var searchText = ""
     @State private var showingAsk = false
     @State private var showingRescanConfirmation = false
+    @State private var viewMode: JournalMode = .list
     /// The very first scan must run to completion (the onboarding moment); only afterwards can a
     /// scan be cancelled.
     @AppStorage("hasCompletedInitialScan") private var hasCompletedInitialScan = false
@@ -59,24 +62,31 @@ struct JournalListView: View {
                         Task { await scanner.scan(in: modelContext) }
                     }
                 } else {
-                    ScanStatusView(scanner: scanner, allowCancel: hasCompletedInitialScan) { fullRescan in
-                        Task { await scanner.scan(in: modelContext, fullRescan: fullRescan) }
-                    }
-                    .background(.bar)
-                    Divider()
+                    switch viewMode {
+                    case .list:
+                        ScanStatusView(scanner: scanner, allowCancel: hasCompletedInitialScan) { fullRescan in
+                            Task { await scanner.scan(in: modelContext, fullRescan: fullRescan) }
+                        }
+                        .background(.bar)
+                        Divider()
 
-                    List {
-                        ForEach(filteredVisits) { visit in
-                            NavigationLink(destination: VisitDetailView(visit: visit)) {
-                                row(for: visit)
+                        List {
+                            ForEach(filteredVisits) { visit in
+                                NavigationLink(destination: VisitDetailView(visit: visit)) {
+                                    row(for: visit)
+                                }
+                            }
+                            .onDelete(perform: deleteVisits)
+                        }
+                        .searchable(text: $searchText, prompt: "Search places, cities, countries…")
+                        .overlay {
+                            if filteredVisits.isEmpty && !searchText.isEmpty {
+                                ContentUnavailableView.search(text: searchText)
                             }
                         }
-                        .onDelete(perform: deleteVisits)
-                    }
-                    .searchable(text: $searchText, prompt: "Search places, cities, countries…")
-                    .overlay {
-                        if filteredVisits.isEmpty && !searchText.isEmpty {
-                            ContentUnavailableView.search(text: searchText)
+                    case .map:
+                        JournalMapView(scanner: scanner) {
+                            Task { await scanner.scan(in: modelContext) }
                         }
                     }
                 }
@@ -132,6 +142,16 @@ struct JournalListView: View {
                         } label: {
                             Label("Ask", systemImage: "bubble.left.and.text.bubble.right.fill")
                         }
+                    }
+                }
+                if !visits.isEmpty {
+                    ToolbarItem(placement: .principal) {
+                        Picker("View", selection: $viewMode) {
+                            Image(systemName: "list.bullet").tag(JournalMode.list)
+                            Image(systemName: "map").tag(JournalMode.map)
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(width: 120)
                     }
                 }
                 // Reachable even when the journal is empty but the trash isn't, so a tester who
