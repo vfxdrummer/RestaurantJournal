@@ -14,10 +14,15 @@ enum Analytics {
     /// `SupabaseAuthService`.
     static var isAuthenticated = false
 
+    /// One id per app launch (process) — lets us compute per-session metrics like "locations viewed
+    /// per session." Resets on a cold launch, persists across backgrounding.
+    static let sessionID = UUID().uuidString
+
     static func log(_ name: String, _ props: [String: Any] = [:]) {
         guard isEnabled else { return }
         var enriched = props
         enriched["authenticated"] = isAuthenticated
+        enriched["session"] = sessionID
         let payload: [String: Any] = [
             "install_id": installID,
             "name": name,

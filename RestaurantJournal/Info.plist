@@ -60,19 +60,12 @@
         <string>UIInterfaceOrientationLandscapeLeft</string>
         <string>UIInterfaceOrientationLandscapeRight</string>
     </array>
-    <key>UIBackgroundModes</key>
-    <array>
-        <string>fetch</string>
-        <string>location</string>
-    </array>
+    <key>ITSAppUsesNonExemptEncryption</key>
+    <false/>
     <key>NSPhotoLibraryUsageDescription</key>
     <string>Restaurant Journal scans your photo library to detect restaurant visits from your food photos.</string>
-    <key>NSPhotoLibraryAddUsageDescription</key>
-    <string>Restaurant Journal may save annotated food photos to your library.</string>
     <key>NSLocationWhenInUseUsageDescription</key>
-    <string>Restaurant Journal uses your location to identify the restaurant you're currently at.</string>
-    <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-    <string>Restaurant Journal uses your location in the background to detect restaurant visits automatically.</string>
+    <string>Restaurant Journal uses your location to center the map on where you've dined.</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>Restaurant Journal records voice notes about your restaurant experiences.</string>
     <key>NSSpeechRecognitionUsageDescription</key>

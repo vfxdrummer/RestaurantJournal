@@ -118,6 +118,7 @@ final class VisitDiscoveryService {
             guard !assets.isEmpty else {
                 summary = "No new photos to import."
                 if doFull { lastNegativeRescanVersion = RestaurantPhotoClassifier.version }
+                Analytics.log("scan_completed", ["photos_scanned": 0, "visits_added": 0, "full_rescan": doFull])
                 phase = .finished
                 return
             }
@@ -179,6 +180,9 @@ final class VisitDiscoveryService {
                     if let best = candidates.first {
                         let restaurant = try RestaurantResolver.findOrCreate(from: best, in: context)
 
+                        // The user marked this place "don't detect" (e.g. it's next to their home).
+                        if restaurant.isIgnored { continue }
+
                         // If the same meal was split across scans (same place, minutes apart), fold
                         // the new photos into that recent visit instead of creating a duplicate.
                         let target: Visit
@@ -194,9 +198,10 @@ final class VisitDiscoveryService {
                             context.insert(visit)
                             newVisitCount += 1
                             target = visit
+                            // Brand-only (chains) — local restaurants bucket as "Independent" so we
+                            // never send specific dining-place names off the device.
                             Analytics.log("visit_created", [
-                                "brand": LoyaltyDirectory.program(for: restaurant.name)?.brand ?? "Independent",
-                                "restaurant": restaurant.name,
+                                "brand": LoyaltyDirectory.program(for: restaurant.name)?.brand ?? "Independent"
                             ])
                         }
 
@@ -235,6 +240,12 @@ final class VisitDiscoveryService {
                 }
             }
         }
+        Analytics.log("scan_completed", [
+            "photos_scanned": total,
+            "visits_added": newVisitCount,
+            "cancelled": isCancelled,
+            "full_rescan": doFull,
+        ])
         isCancelled = false
         phase = .finished
     }

@@ -17,13 +17,19 @@ struct JournalListView: View {
     @Query(filter: #Predicate<Visit> { $0.deletedAt != nil })
     private var deletedVisits: [Visit]
 
+    @Query(filter: #Predicate<Restaurant> { $0.isIgnored })
+    private var ignoredRestaurants: [Restaurant]
+
     @State private var scanner = VisitDiscoveryService()
     @State private var showResetConfirmation = false
     @State private var celebrationCount: Int?
     @State private var searchText = ""
+#if ASK_FEATURE
     @State private var showingAsk = false
+#endif
     @State private var showingProfile = false
     @State private var showingRescanConfirmation = false
+    @State private var bulkPromptRestaurant: Restaurant?
     @State private var viewMode: JournalMode = .list
     @AppStorage("onlyVisitsWithPhotos") private var onlyVisitsWithPhotos = false
     /// Shared with the map so the rating filter carries across views.
@@ -63,6 +69,26 @@ struct JournalListView: View {
         }
     }
 
+    private static let monthFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMMM yyyy"
+        return formatter
+    }()
+
+    /// The filtered visits grouped into month/year sections, preserving newest-first order.
+    private var groupedVisits: [(title: String, visits: [Visit])] {
+        var groups: [(title: String, visits: [Visit])] = []
+        for visit in filteredVisits {
+            let title = Self.monthFormatter.string(from: visit.date)
+            if let index = groups.firstIndex(where: { $0.title == title }) {
+                groups[index].visits.append(visit)
+            } else {
+                groups.append((title, [visit]))
+            }
+        }
+        return groups
+    }
+
     private func searchHaystack(for visit: Visit) -> String {
         var parts: [String] = []
         if let restaurant = visit.restaurant {
@@ -95,12 +121,16 @@ struct JournalListView: View {
                         Divider()
 
                         List {
-                            ForEach(filteredVisits) { visit in
-                                NavigationLink(destination: VisitDetailView(visit: visit)) {
-                                    row(for: visit)
+                            ForEach(groupedVisits, id: \.title) { group in
+                                Section(group.title) {
+                                    ForEach(group.visits) { visit in
+                                        NavigationLink(destination: VisitDetailView(visit: visit)) {
+                                            row(for: visit)
+                                        }
+                                    }
+                                    .onDelete { offsets in deleteVisits(offsets, in: group.visits) }
                                 }
                             }
-                            .onDelete(perform: deleteVisits)
                         }
                         .searchable(text: $searchText, prompt: "Search places, cities, countries…")
                         .overlay {
@@ -129,7 +159,7 @@ struct JournalListView: View {
             }
             .onChange(of: scanner.phase) { _, phase in
                 guard phase == .finished else { return }
-                Analytics.log("scan_completed", ["visits_found": scanner.newVisitCount])
+                // (scan_completed is logged in VisitDiscoveryService with the full funnel.)
                 // Once a scan finishes without error, the onboarding scan is done — later scans
                 // (including Rescan All) may be cancelled from then on.
                 if scanner.errorMessage == nil { hasCompletedInitialScan = true }
@@ -150,11 +180,17 @@ struct JournalListView: View {
                     hasCompletedInitialScan = true
                 }
             }
+#if ASK_FEATURE
             .sheet(isPresented: $showingAsk) {
                 AskJournalView()
             }
+#endif
             .sheet(isPresented: $showingProfile) {
+#if CARD_LINKING
                 ProfileView()
+#else
+                AppSettingsView()
+#endif
             }
             .task {
                 await LocationBackfillService.backfillIfNeeded(in: modelContext)
@@ -164,6 +200,7 @@ struct JournalListView: View {
                 VisitDeletion.purgeExpired(in: modelContext)
             }
             .toolbar {
+#if ASK_FEATURE
                 // Ask lives here now — a conversational overlay you summon from the journal, rather
                 // than a permanent tab. Hidden until there are visits to ask about.
                 if !visits.isEmpty {
@@ -175,6 +212,7 @@ struct JournalListView: View {
                         }
                     }
                 }
+#endif
                 if !visits.isEmpty {
                     ToolbarItem(placement: .principal) {
                         Picker("View", selection: $viewMode) {
@@ -185,15 +223,19 @@ struct JournalListView: View {
                         .frame(width: 120)
                     }
                 }
-                // Profile/account — the avatar is the entry point (app logo when signed out or
-                // photo-less, the user's photo once set). Reachable everywhere, including welcome.
+                // Accounts live only in CARD_LINKING builds (an account exists to link a card).
+                // The App Store build is account-free: this entry becomes a lightweight Settings.
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         showingProfile = true
                     } label: {
+#if CARD_LINKING
                         ProfileAvatarView(size: 34)
+#else
+                        Image(systemName: "gearshape").font(.title2)
+#endif
                     }
-                    .accessibilityLabel("Profile")
+                    .accessibilityLabel("Settings")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
@@ -238,6 +280,13 @@ struct JournalListView: View {
                                     systemImage: "trash"
                                 )
                             }
+                            if !ignoredRestaurants.isEmpty {
+                                NavigationLink {
+                                    IgnoredPlacesView()
+                                } label: {
+                                    Label("Ignored Places (\(ignoredRestaurants.count))", systemImage: "nosign")
+                                }
+                            }
 #if DEBUG
                             Divider()
                             Button(role: .destructive) {
@@ -271,6 +320,24 @@ struct JournalListView: View {
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("Re-checks your entire photo library from the beginning to catch anything earlier scans missed. This can take a while. Your existing visits and deletions are kept.")
+            }
+            .confirmationDialog(
+                "More visits at this place",
+                isPresented: Binding(
+                    get: { bulkPromptRestaurant != nil },
+                    set: { if !$0 { bulkPromptRestaurant = nil } }
+                ),
+                titleVisibility: .visible,
+                presenting: bulkPromptRestaurant
+            ) { restaurant in
+                Button("Delete all & stop detecting", role: .destructive) {
+                    VisitDeletion.deleteAllAndIgnore(restaurant, in: modelContext)
+                    bulkPromptRestaurant = nil
+                }
+                Button("Just this one", role: .cancel) { bulkPromptRestaurant = nil }
+            } message: { restaurant in
+                let count = restaurant.visits.filter { $0.deletedAt == nil }.count
+                Text("There \(count == 1 ? "is" : "are") \(count) more visit\(count == 1 ? "" : "s") at \(restaurant.name). If this isn't a place you dine — say it's next to your home — remove them all and stop detecting it here.")
             }
 #if DEBUG
             .confirmationDialog(
@@ -341,9 +408,9 @@ struct JournalListView: View {
         }
     }
 
-    private func deleteVisits(_ offsets: IndexSet) {
-        let shown = filteredVisits
-        let toDelete = offsets.map { shown[$0] }
+    private func deleteVisits(_ offsets: IndexSet, in sectionVisits: [Visit]) {
+        let toDelete = offsets.map { sectionVisits[$0] }
+        let restaurants = toDelete.compactMap { $0.restaurant }
         for visit in toDelete {
             VisitDeletion.delete(visit, in: modelContext)
         }
@@ -351,6 +418,13 @@ struct JournalListView: View {
         // deleted still lives in Recently Deleted regardless.
         if let last = toDelete.last {
             armUndo(for: last)
+        }
+        // If a place still has other visits, it's likely a false-positive spot — offer to clean it
+        // all up and stop detecting it (e.g. a restaurant next to the user's home).
+        if let restaurant = restaurants.first(where: { r in
+            !r.isIgnored && r.visits.contains { $0.deletedAt == nil }
+        }) {
+            bulkPromptRestaurant = restaurant
         }
     }
 

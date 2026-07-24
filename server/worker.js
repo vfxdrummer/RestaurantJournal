@@ -25,6 +25,20 @@ export default {
       });
     }
 
+    // Public support page (required by the App Store listing). GET only, no auth.
+    if (request.method === "GET" && url.pathname === "/support") {
+      return new Response(SUPPORT_HTML, {
+        headers: { "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=3600" },
+      });
+    }
+
+    // Root landing so the custom domain's homepage isn't an error.
+    if (request.method === "GET" && url.pathname === "/") {
+      return new Response(LANDING_HTML, {
+        headers: { "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=3600" },
+      });
+    }
+
     if (request.method === "OPTIONS") return cors(new Response(null, { status: 204 }));
     if (request.method !== "POST") return json({ error: "POST only" }, 405);
 
@@ -134,6 +148,99 @@ function cors(resp) {
   return resp;
 }
 
+// Served at GET / — a minimal branded landing so the custom domain root isn't an error.
+const LANDING_HTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Restaurant Journal</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font: 18px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    min-height: 100vh; margin: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; text-align: center; padding: 24px;
+    color: #1c1c1e; background: #f6f3ec;
+  }
+  @media (prefers-color-scheme: dark) { body { background: #000; color: #e5e5ea; } a { color: #6db3f2; } }
+  h1 { font-size: 2.4rem; margin: 0 0 .25rem; }
+  .tag { color: #8a8a8e; margin: 0 0 2rem; }
+  .links a { margin: 0 .6rem; }
+</style>
+</head>
+<body>
+  <h1>Restaurant Journal</h1>
+  <p class="tag">Your dining life, remembered.</p>
+  <p class="links"><a href="/support">Support</a> &middot; <a href="/privacy">Privacy Policy</a></p>
+</body>
+</html>`;
+
+// Served at GET /support — satisfies the App Store's required Support URL.
+const SUPPORT_HTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Restaurant Journal — Support</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font: 17px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    max-width: 720px; margin: 0 auto; padding: 40px 22px 80px; color: #1c1c1e;
+  }
+  @media (prefers-color-scheme: dark) { body { background: #000; color: #e5e5ea; } a { color: #6db3f2; } }
+  h1 { font-size: 2rem; margin-bottom: .25rem; }
+  h2 { font-size: 1.15rem; margin-top: 2rem; }
+  .muted { color: #8a8a8e; }
+  .contact { border-left: 3px solid #34a853; padding: .5rem 0 .5rem 1rem; margin: 1.5rem 0; }
+</style>
+</head>
+<body>
+
+<h1>Restaurant Journal — Support</h1>
+<p class="muted">Your dining life, remembered.</p>
+
+<div class="contact">
+  <strong>Need help?</strong> Email <a href="mailto:timothy.brandt@gmail.com">timothy.brandt@gmail.com</a>
+  and we'll get back to you.
+</div>
+
+<h2>How does it find my restaurants?</h2>
+<p>
+  Restaurant Journal analyzes the photos already in your library — using their location and
+  timestamps — to detect the places you've eaten and build your dining history. All of this happens
+  <strong>on your device</strong>; your photos never leave your phone.
+</p>
+
+<h2>It didn't find a place I went to</h2>
+<p>
+  Detection relies on photos that have location data (a geotag). If Location was turned off for your
+  camera when you took the photos, or a photo is a screenshot/download, the app can't place it. Make
+  sure Location is enabled for the Camera in iOS Settings for future photos, and try "Rescan all
+  photos" from the menu.
+</p>
+
+<h2>How do I remove a visit or my data?</h2>
+<p>
+  Swipe to delete any visit — it moves to Recently Deleted for 30 days, then is removed for good.
+  Because everything is stored on your device, deleting the app removes all of your journal data.
+</p>
+
+<h2>How do I turn off analytics?</h2>
+<p>
+  The app collects only anonymous, aggregate usage data to improve it. You can turn this off anytime
+  in the app's <strong>Settings</strong>.
+</p>
+
+<h2>Privacy</h2>
+<p>
+  Read our full <a href="/privacy">Privacy Policy</a>.
+</p>
+
+</body>
+</html>`;
+
 // Served at GET /privacy. Keep in sync with legal/privacy-policy.html (source of truth).
 const PRIVACY_HTML = `<!DOCTYPE html>
 <html lang="en">
@@ -158,7 +265,7 @@ const PRIVACY_HTML = `<!DOCTYPE html>
 <body>
 
 <h1>Privacy Policy</h1>
-<p class="muted">Restaurant Journal &middot; Effective date: July 8, 2026</p>
+<p class="muted">Restaurant Journal &middot; Effective date: July 24, 2026</p>
 
 <p>
   Restaurant Journal ("the app", "we", "us") helps you remember where you've dined. This policy
@@ -289,13 +396,26 @@ const PRIVACY_HTML = `<!DOCTYPE html>
   exercise these rights, contact us at the address below.
 </p>
 
-<h2>13. Changes to this policy</h2>
+<h2>13. Anonymous usage analytics</h2>
+<p>
+  To understand how the app is used and improve it, we collect <strong>anonymous, aggregate usage
+  events</strong> — for example when the app is opened, when a scan runs and how many visits it found,
+  and which screens are viewed. These events are tied to a <strong>random per-install identifier</strong>
+  and a per-session identifier, never to your name, account, photos, notes, or financial data. We may
+  record the <em>brand</em> of chains in aggregate (e.g., how many scans found a Starbucks); independent
+  restaurants are grouped simply as &ldquo;Independent,&rdquo; so the specific places you visit are never
+  sent. We record only <em>whether</em> a user is signed in, never who. This data is stored on our own
+  backend, is not sold, and involves no third-party advertising or tracking. You can turn it off anytime
+  in the app&rsquo;s Settings.
+</p>
+
+<h2>14. Changes to this policy</h2>
 <p>
   We may update this policy as the app evolves. Material changes will be reflected by updating the
   effective date above and, where appropriate, notifying you in the app.
 </p>
 
-<h2>14. Contact</h2>
+<h2>15. Contact</h2>
 <p>
   Questions or requests: <a href="mailto:timothy.brandt@gmail.com">timothy.brandt@gmail.com</a>
 </p>

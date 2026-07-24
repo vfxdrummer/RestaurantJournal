@@ -38,6 +38,9 @@ final class Restaurant {
     var city: String?
     var region: String?
     var country: String?
+    /// When true, scans never create visits here (e.g. a restaurant next to the user's home that
+    /// keeps generating false positives). Set via "Stop detecting this place".
+    var isIgnored: Bool = false
 
     @Relationship(deleteRule: .cascade, inverse: \Visit.restaurant)
     var visits: [Visit] = []

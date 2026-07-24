@@ -4,10 +4,12 @@ import SwiftData
 struct VisitDetailView: View {
     @Bindable var visit: Visit
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.dismiss) private var dismiss
 
     @State private var showingRecorder = false
     @State private var showingEditPlace = false
     @State private var showingShare = false
+    @State private var showingStopDetecting = false
     @State private var viewerPhotoID: String?
     @StateObject private var player = AudioPlayerService()
     @StateObject private var dishRecognizer = DishRecognizer()
@@ -221,9 +223,36 @@ struct VisitDetailView: View {
                 }
                 .listRowInsets(EdgeInsets())
             }
+
+            if let restaurant = visit.restaurant {
+                Section {
+                    Button(role: .destructive) {
+                        showingStopDetecting = true
+                    } label: {
+                        Label("Stop detecting this place", systemImage: "nosign")
+                    }
+                } footer: {
+                    Text("Removes all visits at \(restaurant.name) and stops detecting it in future scans — handy if it isn't a place you dine (say, it's next to your home).")
+                }
+            }
         }
         .navigationTitle(visit.restaurant?.name ?? "Visit")
         .navigationBarTitleDisplayMode(.inline)
+        .confirmationDialog(
+            "Stop detecting this place?",
+            isPresented: $showingStopDetecting,
+            titleVisibility: .visible,
+            presenting: visit.restaurant
+        ) { restaurant in
+            Button("Delete all & stop detecting", role: .destructive) {
+                VisitDeletion.deleteAllAndIgnore(restaurant, in: modelContext)
+                dismiss()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { restaurant in
+            let count = restaurant.visits.filter { $0.deletedAt == nil }.count
+            Text("This removes all \(count) visit\(count == 1 ? "" : "s") at \(restaurant.name) and stops future scans from detecting it. You can recover the visits from Recently Deleted.")
+        }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
@@ -262,8 +291,7 @@ struct VisitDetailView: View {
         .task {
             dishRecognizer.recognize(visit.photos.map(\.localIdentifier))
             Analytics.log("visit_viewed", [
-                "brand": LoyaltyDirectory.program(for: visit.restaurant?.name)?.brand ?? "Independent",
-                "restaurant": visit.restaurant?.name ?? "Unknown",
+                "brand": LoyaltyDirectory.program(for: visit.restaurant?.name)?.brand ?? "Independent"
             ])
         }
     }

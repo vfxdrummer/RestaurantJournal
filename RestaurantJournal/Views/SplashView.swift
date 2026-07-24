@@ -30,12 +30,14 @@ struct SplashView: View {
         ZStack {
             Color("BrandCream").ignoresSafeArea()
 
-            // Matches the launch screen's logo exactly (same art, size, and centered position)
-            // so the hand-off from the OS launch screen is seamless.
+            // The app-icon mark, rounded to the iOS "squircle" so it reads as the app icon rather
+            // than a hard-edged square (matches the rounded treatment in onboarding/welcome).
             Image("BrandMark")
                 .resizable()
                 .scaledToFit()
                 .frame(width: 140, height: 140)
+                .clipShape(RoundedRectangle(cornerRadius: 31, style: .continuous))
+                .shadow(color: .black.opacity(0.12), radius: 10, y: 5)
 
             // Only the wordmark + tagline animate in, below the (static) logo.
             VStack(spacing: 10) {

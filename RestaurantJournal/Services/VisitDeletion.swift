@@ -24,6 +24,18 @@ enum VisitDeletion {
         try? context.save()
     }
 
+    /// Soft-delete every live visit at a place and mark the place ignored, so future scans stop
+    /// creating visits there. Recoverable — the visits go to Recently Deleted, and the place can be
+    /// un-ignored later. Used when a spot keeps producing false positives (e.g. next to home).
+    static func deleteAllAndIgnore(_ restaurant: Restaurant, in context: ModelContext) {
+        restaurant.isIgnored = true
+        let now = Date()
+        for visit in restaurant.visits where visit.deletedAt == nil {
+            visit.deletedAt = now
+        }
+        try? context.save()
+    }
+
     /// Permanently remove a visit and remember its photos as dismissed, so the next scan doesn't
     /// re-detect and recreate it. This is irreversible.
     static func deletePermanently(_ visit: Visit, in context: ModelContext) {
