@@ -53,49 +53,64 @@ enum SyncMaintenance {
         let stale = photos.filter { !$0.localIdentifier.isEmpty && !present.contains($0.localIdentifier) }
         guard !stale.isEmpty else { return }
 
-        // Remap the stale ones that carry a cloud identifier.
-        let cloudIDs = stale.compactMap(\.photoCloudIdentifier)
-        guard !cloudIDs.isEmpty else { return }
-        let cloudToLocal = await PhotoLibraryLinker.localIdentifiers(forCloudIdentifiers: cloudIDs)
+        // Re-link most-recent photos first — that's what the user sees at the top of the journal —
+        // and commit each batch so those tiles resolve before the older ones finish.
+        let staleByRecency = stale.sorted { $0.takenAt > $1.takenAt }
+        let batchSize = 100
+        for start in stride(from: 0, to: staleByRecency.count, by: batchSize) {
+            guard !VisitDiscoveryService.isScanning else { return }
+            let batch = Array(staleByRecency[start ..< min(start + batchSize, staleByRecency.count)])
+            let cloudIDs = batch.compactMap(\.photoCloudIdentifier)
+            guard !cloudIDs.isEmpty else { continue }
+            let cloudToLocal = await PhotoLibraryLinker.localIdentifiers(forCloudIdentifiers: cloudIDs)
 
-        // Synchronous mutate + save burst — guard immediately before it (no `await` inside) so a scan
-        // that started during the awaits above can't interleave a conflicting save.
-        guard !VisitDiscoveryService.isScanning else { return }
-        var remapped = 0
-        for photo in stale {
-            if let cloud = photo.photoCloudIdentifier, let newLocal = cloudToLocal[cloud] {
-                photo.localIdentifier = newLocal
-                remapped += 1
+            // Synchronous mutate + save burst — guard immediately before it (no `await` inside) so a
+            // scan that started during the await above can't interleave a conflicting save.
+            guard !VisitDiscoveryService.isScanning else { return }
+            var remapped = 0
+            for photo in batch {
+                if let cloud = photo.photoCloudIdentifier, let newLocal = cloudToLocal[cloud] {
+                    photo.localIdentifier = newLocal
+                    remapped += 1
+                }
             }
+            if remapped > 0 { try? context.save() }
         }
-        if remapped > 0 { try? context.save() }
     }
 
     // MARK: - 2. Cloud-identifier backfill
 
-    /// Capture cloud identifiers for photos that don't have one yet, in bounded batches.
-    private static func backfillCloudIdentifiers(context: ModelContext, limit: Int = 200) async {
+    /// Capture cloud identifiers for photos that don't have one yet — the key to re-linking on other
+    /// devices. Processes *all* of them (recent first) in batches, since it's a cheap PhotoKit lookup
+    /// and the faster these propagate, the faster a fresh device can re-link its photos. No-op when
+    /// iCloud Photos is off (the photos then have no cloud identifiers).
+    private static func backfillCloudIdentifiers(context: ModelContext) async {
         guard !VisitDiscoveryService.isScanning else { return }
 
-        var descriptor = FetchDescriptor<PhotoAsset>(
-            predicate: #Predicate { $0.photoCloudIdentifier == nil }
+        let descriptor = FetchDescriptor<PhotoAsset>(
+            predicate: #Predicate { $0.photoCloudIdentifier == nil },
+            sortBy: [SortDescriptor(\.takenAt, order: .reverse)]
         )
-        descriptor.fetchLimit = limit
         guard let photos = try? context.fetch(descriptor), !photos.isEmpty else { return }
 
-        let localIDs = photos.map(\.localIdentifier).filter { !$0.isEmpty }
-        let localToCloud = await PhotoLibraryLinker.cloudIdentifiers(forLocalIdentifiers: localIDs)
-        guard !localToCloud.isEmpty else { return }
+        let batchSize = 300
+        for start in stride(from: 0, to: photos.count, by: batchSize) {
+            guard !VisitDiscoveryService.isScanning else { return }
+            let batch = Array(photos[start ..< min(start + batchSize, photos.count)])
+            let localIDs = batch.map(\.localIdentifier).filter { !$0.isEmpty }
+            let localToCloud = await PhotoLibraryLinker.cloudIdentifiers(forLocalIdentifiers: localIDs)
+            guard !localToCloud.isEmpty else { continue }
 
-        // Synchronous mutate + save burst (see remap note).
-        guard !VisitDiscoveryService.isScanning else { return }
-        var updated = 0
-        for photo in photos {
-            if let cloud = localToCloud[photo.localIdentifier] {
-                photo.photoCloudIdentifier = cloud
-                updated += 1
+            // Synchronous mutate + save burst (see remap note).
+            guard !VisitDiscoveryService.isScanning else { return }
+            var updated = 0
+            for photo in batch {
+                if let cloud = localToCloud[photo.localIdentifier] {
+                    photo.photoCloudIdentifier = cloud
+                    updated += 1
+                }
             }
+            if updated > 0 { try? context.save() }
         }
-        if updated > 0 { try? context.save() }
     }
 }

@@ -18,8 +18,10 @@ enum CoverThumbnailService {
     static func backfill(context: ModelContext, limit: Int = 40) async {
         guard !VisitDiscoveryService.isScanning else { return }
 
+        // Most-recent visits first — that's what the user sees at the top of the journal.
         var descriptor = FetchDescriptor<Visit>(
-            predicate: #Predicate { $0.coverThumbnailData == nil && $0.deletedAt == nil }
+            predicate: #Predicate { $0.coverThumbnailData == nil && $0.deletedAt == nil },
+            sortBy: [SortDescriptor(\.date, order: .reverse)]
         )
         descriptor.fetchLimit = limit * 3  // over-fetch: some candidates are card-only (no photo)
         guard let candidates = try? context.fetch(descriptor) else { return }
