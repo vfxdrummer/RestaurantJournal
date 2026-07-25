@@ -44,8 +44,14 @@ final class Restaurant {
     /// keeps generating false positives). Set via "Stop detecting this place".
     var isIgnored: Bool = false
 
+    // CloudKit requires to-many relationships to be OPTIONAL. Store it optional and expose a
+    // non-optional `visits` computed accessor so existing call sites are unchanged.
     @Relationship(deleteRule: .cascade, inverse: \Visit.restaurant)
-    var visits: [Visit] = []
+    var visitsStorage: [Visit]?
+    var visits: [Visit] {
+        get { visitsStorage ?? [] }
+        set { visitsStorage = newValue }
+    }
 
     init(name: String, latitude: Double, longitude: Double, address: String? = nil, mapItemIdentifier: String? = nil, websiteHost: String? = nil, categoryRawValue: String? = nil, city: String? = nil, region: String? = nil, country: String? = nil) {
         self.name = name
@@ -106,14 +112,28 @@ final class Visit {
     /// A visit sourced only from a card charge (no photos backing it).
     var isCardOnly: Bool { cardTransactionID != nil && photos.isEmpty }
 
+    // CloudKit requires to-many relationships to be OPTIONAL; non-optional computed accessors keep
+    // call sites unchanged.
     @Relationship(deleteRule: .cascade, inverse: \PhotoAsset.visit)
-    var photos: [PhotoAsset] = []
+    var photosStorage: [PhotoAsset]?
+    var photos: [PhotoAsset] {
+        get { photosStorage ?? [] }
+        set { photosStorage = newValue }
+    }
 
     @Relationship(deleteRule: .cascade, inverse: \VoiceNote.visit)
-    var voiceNotes: [VoiceNote] = []
+    var voiceNotesStorage: [VoiceNote]?
+    var voiceNotes: [VoiceNote] {
+        get { voiceNotesStorage ?? [] }
+        set { voiceNotesStorage = newValue }
+    }
 
     @Relationship(deleteRule: .cascade, inverse: \DetectedFace.visit)
-    var detectedFaces: [DetectedFace] = []
+    var detectedFacesStorage: [DetectedFace]?
+    var detectedFaces: [DetectedFace] {
+        get { detectedFacesStorage ?? [] }
+        set { detectedFacesStorage = newValue }
+    }
 
     init(date: Date, restaurant: Restaurant? = nil, latitude: Double? = nil, longitude: Double? = nil) {
         self.date = date
@@ -268,8 +288,13 @@ final class Person {
     // Default required for CloudKit sync (see Restaurant); init always sets the real value.
     var createdAt: Date = Date()
 
+    // CloudKit requires to-many relationships to be OPTIONAL; computed accessor keeps call sites same.
     @Relationship(deleteRule: .cascade, inverse: \DetectedFace.person)
-    var faces: [DetectedFace] = []
+    var facesStorage: [DetectedFace]?
+    var faces: [DetectedFace] {
+        get { facesStorage ?? [] }
+        set { facesStorage = newValue }
+    }
 
     init(representativeFaceData: Data? = nil, representativeFeaturePrintData: Data? = nil, createdAt: Date = Date()) {
         self.representativeFaceData = representativeFaceData
