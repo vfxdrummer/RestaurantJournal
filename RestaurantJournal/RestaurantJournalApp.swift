@@ -15,9 +15,7 @@ struct RestaurantJournalApp: App {
     /// local-only). The iCloud *account* status alone doesn't reveal this — so we surface it in
     /// Settings to avoid a green "backing up" that isn't really syncing.
     private(set) static var isCloudKitActive = false
-    /// Which CloudKit layout ended up active ("two-store" / "single-store"), for diagnostics.
-    private(set) static var cloudKitStoreMode: String?
-    /// If CloudKit init failed and we fell back to local-only, the reason(s) (for diagnostics).
+    /// If CloudKit init failed and we fell back to local-only, a short reason (shown in Settings).
     private(set) static var cloudKitSetupError: String?
 
     /// Builds a two-store container:
@@ -48,40 +46,21 @@ struct RestaurantJournalApp: App {
         // On-device-only caches. Distinct store name so it lives in its own file.
         let local = ModelConfiguration("Local", schema: localSchema, cloudKitDatabase: .none)
 
-        // Try CloudKit layouts in order; use the first that loads. This also diagnoses whether the
-        // *multi-store* mechanics are the blocker (if single-store loads when two-store didn't).
+        // Preferred: journal synced to the user's private iCloud (unless the user turned it off).
         if SyncPreference.isEnabled {
-            // Attempt 1 — two-store: journal → CloudKit, caches local (ideal; caches never sync).
+            let cloudJournal = ModelConfiguration(
+                "Journal", schema: journalSchema, cloudKitDatabase: .private(cloudKitContainerID)
+            )
             do {
-                let cloudJournal = ModelConfiguration(
-                    "Journal", schema: journalSchema, cloudKitDatabase: .private(cloudKitContainerID)
-                )
                 let container = try ModelContainer(for: fullSchema, configurations: cloudJournal, local)
                 isCloudKitActive = true
-                cloudKitStoreMode = "two-store"
-                print("[iCloudSync] CloudKit active: two-store")
                 return container
             } catch {
-                recordSetupError("two-store", error)
-            }
-
-            // Attempt 2 — canonical single-store CloudKit: a schemaless configuration applied to all
-            // types (the standard NSPersistentCloudKitContainer setup). This differs from attempt 1 in
-            // construction, so it isolates whether the multi-store schema wiring is what fails.
-            do {
-                let config = ModelConfiguration(cloudKitDatabase: .private(cloudKitContainerID))
-                let container = try ModelContainer(
-                    for: Restaurant.self, Visit.self, PhotoAsset.self, VoiceNote.self,
-                        Person.self, DetectedFace.self,
-                        ScreenedPhoto.self, EstablishmentLogo.self, FaceScannedPhoto.self,
-                    configurations: config
-                )
-                isCloudKitActive = true
-                cloudKitStoreMode = "single-store"
-                print("[iCloudSync] CloudKit active: single-store (two-store failed)")
-                return container
-            } catch {
-                recordSetupError("single-store", error)
+                // Record why (for the honest "sync not active" state) and fall back to local-only.
+                let ns = error as NSError
+                cloudKitSetupError = (ns.userInfo[NSLocalizedFailureReasonErrorKey] as? String)
+                    ?? error.localizedDescription
+                print("[iCloudSync] CloudKit unavailable, using local-only: \(cloudKitSetupError ?? "")")
             }
         }
 
@@ -92,22 +71,6 @@ struct RestaurantJournalApp: App {
         }
 
         fatalError("Could not create ModelContainer")
-    }
-
-    /// Append a formatted CloudKit init failure to `cloudKitSetupError` and log it (SwiftDataError is
-    /// generic, so we pull whatever detail we can from the bridged NSError).
-    private static func recordSetupError(_ label: String, _ error: Error) {
-        let ns = error as NSError
-        var detail = "[\(label)] \(String(reflecting: error))"
-        if let underlying = ns.userInfo[NSUnderlyingErrorKey] as? NSError {
-            detail += " ‖ underlying: \(underlying.localizedDescription) [\(underlying.domain) \(underlying.code)]"
-        }
-        if let reason = ns.userInfo[NSLocalizedFailureReasonErrorKey] as? String {
-            detail += " ‖ reason: \(reason)"
-        }
-        cloudKitSetupError = [cloudKitSetupError, detail].compactMap { $0 }.joined(separator: "  •  ")
-        print("[iCloudSync] \(label) FAILED: \(detail)")
-        print("[iCloudSync]   full userInfo: \(ns.userInfo)")
     }
 
     var body: some Scene {

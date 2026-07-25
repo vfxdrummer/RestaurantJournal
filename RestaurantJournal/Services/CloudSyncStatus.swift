@@ -68,18 +68,10 @@ final class CloudSyncStatus {
     }
 
     private func apply(_ event: NSPersistentCloudKitContainer.Event) {
-        let kind: String
-        switch event.type {
-        case .setup: kind = "setup"
-        case .import: kind = "import"
-        case .export: kind = "export"
-        @unknown default: kind = "event"
-        }
         // A nil endDate means the operation is still in flight.
         if event.endDate == nil {
             isSyncing = true
             if event.type == .import { isImporting = true }
-            print("[iCloudSync] \(kind) started")
             return
         }
         isSyncing = false
@@ -90,10 +82,8 @@ final class CloudSyncStatus {
             // photos once imported data has landed.
             if event.type == .export { lastSyncDate = event.endDate }
             if event.type == .import { lastImportDate = event.endDate ?? Date() }
-            print("[iCloudSync] \(kind) finished OK")
         } else if let error = event.error {
             lastErrorMessage = error.localizedDescription
-            print("[iCloudSync] \(kind) FAILED: \(error)")
         }
     }
 }

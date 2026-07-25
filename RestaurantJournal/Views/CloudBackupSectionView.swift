@@ -54,10 +54,13 @@ struct CloudBackupSectionView: View {
         // Honesty first: if the store didn't actually init with CloudKit, say so — a green
         // "backing up" when we're really local-only is what sent us chasing ghosts.
         if !RestaurantJournalApp.isCloudKitActive { return "iCloud sync not active" }
-        if sync.isSyncing { return "Backing up to iCloud…" }
+        if sync.isSyncing { return "Syncing with iCloud…" }
         switch sync.account {
         case .checking: return "Checking iCloud…"
-        case .available: return sync.lastErrorMessage == nil ? "Backed up to iCloud" : "Backup issue"
+        case .available:
+            if sync.lastErrorMessage != nil { return "Backup issue" }
+            // Only claim "Backed up" once an upload has actually completed.
+            return sync.lastSyncDate != nil ? "Backed up to iCloud" : "Connected to iCloud"
         case .noAccount: return "Not signed in to iCloud"
         case .restricted: return "iCloud is restricted"
         case .unavailable: return "iCloud unavailable"
