@@ -52,7 +52,9 @@ struct ScanStatusView: View {
                 // Stage 2 — matching places (runs at the same time, paced by MapKit's limit).
                 progressRow(
                     title: "Matching places",
-                    detail: "\(scanner.newVisitCount) found",
+                    detail: scanner.matchTotal > 0
+                        ? "\(scanner.newVisitCount)/\(scanner.matchTotal) found"
+                        : "\(scanner.newVisitCount) found",
                     value: scanner.matchProgress
                 )
 
