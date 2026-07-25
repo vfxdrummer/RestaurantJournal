@@ -15,9 +15,9 @@ struct ScanStatusView: View {
             case .scanning, .paused:
                 HStack(alignment: .firstTextBaseline) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(scanner.phase == .paused ? "Paused" : "Scanning photos…")
+                        Text(scanner.phase == .paused ? "Paused" : scanner.stageDescription)
                             .font(.subheadline).bold()
-                        Text("\(scanner.processed) of \(scanner.total) photos · \(scanner.newVisitCount) found")
+                        Text("\(scanner.processed) of \(scanner.total) · \(scanner.newVisitCount) found")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

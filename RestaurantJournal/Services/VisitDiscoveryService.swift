@@ -30,6 +30,9 @@ final class VisitDiscoveryService {
     private(set) var newVisitCount = 0
     private(set) var errorMessage: String?
     private(set) var summary: String?
+    /// What the scan is currently doing — "Scanning photos…" (phase 1) or "Matching places…"
+    /// (phase 2). Drives the status label so the two-phase scan reads clearly.
+    private(set) var stageDescription = "Scanning photos…"
 
     var progress: Double { total > 0 ? Double(processed) / Double(total) : 0 }
     var isBusy: Bool { phase == .scanning || phase == .paused }
@@ -96,6 +99,7 @@ final class VisitDiscoveryService {
         newVisitCount = 0
         errorMessage = nil
         summary = nil
+        stageDescription = "Scanning photos…"
         isCancelled = false
         isPaused = false
 
@@ -111,6 +115,7 @@ final class VisitDiscoveryService {
         // so it's fast and never re-scans the whole camera roll. A full re-screen of the library
         // only happens when the user explicitly chooses "Rescan all" from the overflow menu.
         let doFull = fullRescan
+        var scannedPhotoCount = 0  // phase 1 count for the summary (`total` is reused by phase 2)
 
         do {
             // Incremental scans look only at photos newer than the last import (fast); a full sweep
@@ -130,13 +135,17 @@ final class VisitDiscoveryService {
                 return
             }
             total = assets.count
+            scannedPhotoCount = assets.count
             let clusters = PhotoClusteringService.cluster(assets)
 
             var screenCache = try loadScreenCache(in: context)
             let dismissedIds = try loadDismissedIDs(in: context)
             let currentVersion = RestaurantPhotoClassifier.version
 
-            // 5. Per cluster: gate on dining evidence, look up a restaurant, insert a Visit.
+            // PHASE 1 — screen every cluster for dining evidence (fast; no place lookups). Because
+            // this never waits on MapKit's throttle, the progress bar flies through the whole library
+            // instead of freezing. Dining clusters are queued for phase 2.
+            var diningClusters: [PhotoCluster] = []
             for cluster in clusters {
                 await waitWhilePaused()
                 if isCancelled { break }
@@ -179,70 +188,80 @@ final class VisitDiscoveryService {
                 }
                 // Count photos skipped by the early break so progress still reaches 100%.
                 processed = clusterBase + cluster.assets.count
-
                 if isCancelled { break }
+                if looksLikeDining { diningClusters.append(cluster) }
+                // Persist screening results so an interrupted scan resumes cheaply.
+                try? context.save()
+            }
 
-                if looksLikeDining {
-                    let candidates = await RestaurantLookupService.lookup(near: cluster.centroid)
-                    if let best = candidates.first {
-                        let restaurant = try RestaurantResolver.findOrCreate(from: best, in: context)
+            // PHASE 2 — resolve a place for each dining cluster and create the visit. This is the only
+            // rate-limited step, so queuing it here means MapKit throttling paces place-matching
+            // rather than freezing the whole scan. Reset progress to a fresh "Matching places…" stage.
+            if !diningClusters.isEmpty {
+                stageDescription = "Matching places…"
+                processed = 0
+                total = diningClusters.count
+            }
+            for cluster in diningClusters {
+                await waitWhilePaused()
+                if isCancelled { break }
+                defer { processed += 1; try? context.save() }
 
-                        // The user marked this place "don't detect" (e.g. it's next to their home).
-                        if restaurant.isIgnored { continue }
+                let candidates = await RestaurantLookupService.lookup(near: cluster.centroid)
+                guard let best = candidates.first,
+                      let restaurant = try? RestaurantResolver.findOrCreate(from: best, in: context)
+                else { continue }
 
-                        // If the same meal was split across scans (same place, minutes apart), fold
-                        // the new photos into that recent visit instead of creating a duplicate.
-                        let target: Visit
-                        if let claimed = visitClaimingAnyPhoto(in: cluster, context: context) {
-                            // One of these photos already belongs to a visit — e.g. this visit was
-                            // restored from iCloud and we're rescanning. Reuse it; never duplicate.
-                            target = claimed
-                        } else if let existing = mergeableVisit(for: restaurant, cluster: cluster) {
-                            target = existing
-                        } else {
-                            let visit = Visit(
-                                date: cluster.startDate,
-                                restaurant: restaurant,
-                                latitude: cluster.centroid.latitude,
-                                longitude: cluster.centroid.longitude
-                            )
-                            context.insert(visit)
-                            newVisitCount += 1
-                            target = visit
-                            // Brand-only (chains) — local restaurants bucket as "Independent" so we
-                            // never send specific dining-place names off the device.
-                            Analytics.log("visit_created", [
-                                "brand": LoyaltyDirectory.program(for: restaurant.name)?.brand ?? "Independent"
-                            ])
-                        }
+                // The user marked this place "don't detect" (e.g. it's next to their home).
+                if restaurant.isIgnored { continue }
 
-                        // Don't re-add photos the target visit already has (dedupe on rescan/restore).
-                        let alreadyAttached = Set(target.photos.map(\.localIdentifier))
-                        let newAssets = cluster.assets.filter { !alreadyAttached.contains($0.localIdentifier) }
-                        // Capture cloud identifiers now so they sync *with* the visit. Otherwise a
-                        // second device can receive the visit before the identifiers are backfilled
-                        // and be unable to re-link the photos (shows empty tiles). No-op when iCloud
-                        // Photos is off.
-                        let cloudIDs = await PhotoLibraryLinker.cloudIdentifiers(
-                            forLocalIdentifiers: newAssets.map(\.localIdentifier)
-                        )
-                        for asset in newAssets {
-                            let photo = PhotoAsset(
-                                localIdentifier: asset.localIdentifier,
-                                takenAt: asset.creationDate ?? cluster.startDate,
-                                latitude: asset.location?.coordinate.latitude,
-                                longitude: asset.location?.coordinate.longitude,
-                                isVideo: asset.mediaType == .video
-                            )
-                            photo.photoCloudIdentifier = cloudIDs[asset.localIdentifier]
-                            photo.visit = target
-                            context.insert(photo)
-                        }
-                    }
+                // If the same meal was split across scans (same place, minutes apart), fold the new
+                // photos into that recent visit instead of creating a duplicate.
+                let target: Visit
+                if let claimed = visitClaimingAnyPhoto(in: cluster, context: context) {
+                    // One of these photos already belongs to a visit — e.g. this visit was restored
+                    // from iCloud and we're rescanning. Reuse it; never duplicate.
+                    target = claimed
+                } else if let existing = mergeableVisit(for: restaurant, cluster: cluster) {
+                    target = existing
+                } else {
+                    let visit = Visit(
+                        date: cluster.startDate,
+                        restaurant: restaurant,
+                        latitude: cluster.centroid.latitude,
+                        longitude: cluster.centroid.longitude
+                    )
+                    context.insert(visit)
+                    newVisitCount += 1
+                    target = visit
+                    // Brand-only (chains) — local restaurants bucket as "Independent" so we never
+                    // send specific dining-place names off the device.
+                    Analytics.log("visit_created", [
+                        "brand": LoyaltyDirectory.program(for: restaurant.name)?.brand ?? "Independent"
+                    ])
                 }
 
-                // Persist after each cluster so an interrupted scan resumes cheaply.
-                try? context.save()
+                // Don't re-add photos the target visit already has (dedupe on rescan/restore).
+                let alreadyAttached = Set(target.photos.map(\.localIdentifier))
+                let newAssets = cluster.assets.filter { !alreadyAttached.contains($0.localIdentifier) }
+                // Capture cloud identifiers now so they sync *with* the visit. Otherwise a second
+                // device can receive the visit before the identifiers are backfilled and be unable to
+                // re-link the photos (shows empty tiles). No-op when iCloud Photos is off.
+                let cloudIDs = await PhotoLibraryLinker.cloudIdentifiers(
+                    forLocalIdentifiers: newAssets.map(\.localIdentifier)
+                )
+                for asset in newAssets {
+                    let photo = PhotoAsset(
+                        localIdentifier: asset.localIdentifier,
+                        takenAt: asset.creationDate ?? cluster.startDate,
+                        latitude: asset.location?.coordinate.latitude,
+                        longitude: asset.location?.coordinate.longitude,
+                        isVideo: asset.mediaType == .video
+                    )
+                    photo.photoCloudIdentifier = cloudIDs[asset.localIdentifier]
+                    photo.visit = target
+                    context.insert(photo)
+                }
             }
         } catch {
             errorMessage = error.localizedDescription
@@ -258,12 +277,12 @@ final class VisitDiscoveryService {
                 // so it doesn't repeat until the next improvement.
                 if doFull { lastNegativeRescanVersion = RestaurantPhotoClassifier.version }
                 if summary == nil {
-                    summary = "Scanned \(total) new photo\(total == 1 ? "" : "s") · added \(newVisitCount) visit\(newVisitCount == 1 ? "" : "s")."
+                    summary = "Scanned \(scannedPhotoCount) new photo\(scannedPhotoCount == 1 ? "" : "s") · added \(newVisitCount) visit\(newVisitCount == 1 ? "" : "s")."
                 }
             }
         }
         Analytics.log("scan_completed", [
-            "photos_scanned": total,
+            "photos_scanned": scannedPhotoCount,
             "visits_added": newVisitCount,
             "cancelled": isCancelled,
             "full_rescan": doFull,
