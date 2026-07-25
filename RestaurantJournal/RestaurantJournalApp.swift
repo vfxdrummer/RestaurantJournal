@@ -20,8 +20,9 @@ struct RestaurantJournalApp: App {
 
     /// Builds a two-store container:
     ///  • **Journal** — the irreplaceable user data, synced to the user's private iCloud.
-    ///  • **Local**   — rebuildable Vision/logo caches, kept on-device (they use `@Attribute(.unique)`,
-    ///    which CloudKit forbids).
+    ///  • **Local**   — rebuildable Vision/logo caches, kept on-device (device-specific, and cheap to
+    ///    rebuild). They're CloudKit-compatible (no unique constraints, defaulted attributes) because
+    ///    SwiftData validates the whole container against CloudKit's rules.
     ///
     /// `Person`/`DetectedFace` currently live in the Journal store because they relate to `Visit` and
     /// SwiftData relationships can't cross store boundaries; a later phase moves faces on-device

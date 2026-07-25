@@ -199,16 +199,20 @@ final class VoiceNote {
 /// became a Visit). Keyed by the asset's stable `localIdentifier`.
 @Model
 final class ScreenedPhoto {
-    @Attribute(.unique) var localIdentifier: String
-    var isDining: Bool
+    // No `@Attribute(.unique)` and defaults on every stored property: this model shares a
+    // ModelContainer with the CloudKit-synced Journal store, and SwiftData validates the whole
+    // container against CloudKit's rules (no unique constraints; non-optionals need defaults) even
+    // though this store itself is local-only. Dedup is handled in code (loadScreenCache).
+    var localIdentifier: String = ""
+    var isDining: Bool = false
     /// Set when the user deletes a visit — the scanner then skips this photo so the visit isn't
     /// recreated on the next scan.
-    var dismissed: Bool
+    var dismissed: Bool = false
     /// The classifier version that produced `isDining`. When the classifier improves (its version
     /// bumps), a full rescan re-evaluates stale *negatives* — positives are left alone. Defaults to
     /// 0 so any photos screened before versioning are treated as stale.
     var screenerVersion: Int = 0
-    var screenedAt: Date
+    var screenedAt: Date = Date()
 
     init(localIdentifier: String, isDining: Bool, dismissed: Bool = false, screenerVersion: Int = RestaurantPhotoClassifier.version, screenedAt: Date = Date()) {
         self.localIdentifier = localIdentifier
@@ -224,16 +228,18 @@ final class ScreenedPhoto {
 /// negative result (we looked and found nothing) so we don't keep re-hitting logo-less sites.
 @Model
 final class EstablishmentLogo {
-    @Attribute(.unique) var host: String
+    // See ScreenedPhoto: no unique + defaults, for CloudKit container validation. Dedup by host is
+    // handled in EstablishmentLogoStore.
+    var host: String = ""
     /// The icon bytes, stored outside the main store on disk when large enough.
     @Attribute(.externalStorage) var imageData: Data?
     /// The URL the icon was resolved from — lets us refresh from the same source later.
     var resolvedIconURLString: String?
-    var isMissing: Bool
+    var isMissing: Bool = false
     /// Which logo sources were enabled when a negative result was recorded. If this no longer
     /// matches the current sources (e.g. Brandfetch was turned on), the miss is re-evaluated.
     var missSignature: String?
-    var fetchedAt: Date
+    var fetchedAt: Date = Date()
 
     init(host: String, imageData: Data? = nil, resolvedIconURLString: String? = nil, isMissing: Bool = false, missSignature: String? = nil, fetchedAt: Date = Date()) {
         self.host = host
@@ -304,7 +310,9 @@ final class DetectedFace {
 /// Marks a photo as already scanned for faces, so a rescan skips it (even if it had no faces).
 @Model
 final class FaceScannedPhoto {
-    @Attribute(.unique) var localIdentifier: String
+    // See ScreenedPhoto: no unique + default, for CloudKit container validation. Dedup handled in
+    // FacePeopleService (fetches into a Set).
+    var localIdentifier: String = ""
 
     init(localIdentifier: String) {
         self.localIdentifier = localIdentifier
