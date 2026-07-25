@@ -5,9 +5,12 @@ import SwiftData
 struct RestaurantJournalApp: App {
     let sharedModelContainer: ModelContainer = RestaurantJournalApp.makeContainer()
 
-    /// The user's private iCloud CloudKit container. Must match the identifier added under
-    /// Signing & Capabilities → iCloud → CloudKit in Xcode.
-    static let cloudKitContainerID = "iCloud.com.vfxdrummer.RestaurantJournal"
+    /// The user's private iCloud CloudKit container. Must match the identifier checked under
+    /// Signing & Capabilities → iCloud → CloudKit in Xcode. NOTE: this intentionally ends in
+    /// "Journa" (no trailing "l") — Xcode's Add-Container field truncates the full-length id, so this
+    /// matches the container that actually gets provisioned. The id is developer-only (never shown to
+    /// users) and doesn't need to match the bundle id; it only needs to match the entitlement.
+    static let cloudKitContainerID = "iCloud.com.vfxdrummer.RestaurantJourna"
 
     /// Whether the journal store actually initialized **with CloudKit** (vs. silently falling back to
     /// local-only). The iCloud *account* status alone doesn't reveal this — so we surface it in
