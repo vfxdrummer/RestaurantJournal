@@ -17,6 +17,12 @@ struct EditPlaceView: View {
     @State private var pendingCandidate: RestaurantCandidate?
     @State private var isResolving = false
     @State private var cameraPosition: MapCameraPosition = .automatic
+    @State private var applyToAll = false
+
+    /// How many live visits currently share this visit's restaurant (including this one).
+    private var siblingVisitCount: Int {
+        visit.restaurant?.visits.filter { $0.deletedAt == nil }.count ?? 1
+    }
 
     private var origin: CLLocation? {
         visit.lookupCoordinate.map { CLLocation(latitude: $0.latitude, longitude: $0.longitude) }
@@ -47,6 +53,14 @@ struct EditPlaceView: View {
                         }
                         .frame(height: 200)
                         .listRowInsets(EdgeInsets())
+                    }
+                }
+
+                if siblingVisitCount > 1, let name = visit.restaurant?.name {
+                    Section {
+                        Toggle("Apply to all \(siblingVisitCount) visits at this place", isOn: $applyToAll)
+                    } footer: {
+                        Text("Move every visit currently matched to \(name) to the new place, not just this one.")
                     }
                 }
 
@@ -202,9 +216,7 @@ struct EditPlaceView: View {
 
     private func select(_ candidate: RestaurantCandidate) {
         guard let restaurant = try? RestaurantResolver.findOrCreate(from: candidate, in: modelContext) else { return }
-        visit.restaurant = restaurant
-        try? modelContext.save()
-        dismiss()
+        apply(restaurant)
     }
 
     private func useCustomName(_ raw: String) {
@@ -217,7 +229,19 @@ struct EditPlaceView: View {
             longitude: coordinate?.longitude ?? 0
         )
         modelContext.insert(restaurant)
-        visit.restaurant = restaurant
+        apply(restaurant)
+    }
+
+    /// Reassign the visit's restaurant — just this one, or every visit currently sharing it when the
+    /// user toggled "apply to all" (bulk-fixing a mis-detected place like a spot next to their home).
+    private func apply(_ newRestaurant: Restaurant) {
+        if applyToAll, let old = visit.restaurant {
+            for sibling in old.visits.filter({ $0.deletedAt == nil }) {
+                sibling.restaurant = newRestaurant
+            }
+        } else {
+            visit.restaurant = newRestaurant
+        }
         try? modelContext.save()
         dismiss()
     }
