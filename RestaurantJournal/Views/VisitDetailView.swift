@@ -34,6 +34,15 @@ struct VisitDetailView: View {
         visit.photos.allSatisfy { dishRecognizer.results[$0.localIdentifier] != nil }
     }
 
+    /// Other (non-deleted) visits at this same restaurant, newest first — so you can recall what you
+    /// ate here before without going back out to the map or list.
+    private var otherVisits: [Visit] {
+        guard let restaurant = visit.restaurant else { return [] }
+        return restaurant.visits
+            .filter { $0.deletedAt == nil && $0.persistentModelID != visit.persistentModelID }
+            .sorted { $0.date > $1.date }
+    }
+
     var body: some View {
         Form {
             Section {
@@ -45,49 +54,7 @@ struct VisitDetailView: View {
                 .listRowInsets(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12))
             }
 
-            Section("Place") {
-                if let r = visit.restaurant {
-                    RestaurantNameLabel(restaurant: r, logoSize: 24)
-                    if let addr = r.address { Text(addr).font(.caption).foregroundStyle(.secondary) }
-                    if let apple = r.appleMapsURL {
-                        Link(destination: apple) {
-                            Label("Open in Apple Maps", systemImage: "map")
-                        }
-                    }
-                    if let google = r.googleMapsURL {
-                        Link(destination: google) {
-                            Label("Open in Google Maps", systemImage: "mappin.and.ellipse")
-                        }
-                    }
-                } else {
-                    Text("Unknown restaurant").foregroundStyle(.secondary)
-                }
-                Text(visit.date.formatted(date: .complete, time: .shortened))
-                    .font(.caption)
-
-                if let amount = visit.amount {
-                    Label(
-                        amount.formatted(.currency(code: visit.currencyCode ?? "USD")),
-                        systemImage: "creditcard"
-                    )
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                }
-
-                Button {
-                    showingEditPlace = true
-                } label: {
-                    Label(visit.restaurant == nil ? "Set place" : "Wrong place? Change it",
-                          systemImage: "mappin.and.ellipse")
-                }
-            }
-
-            if let program = LoyaltyDirectory.program(for: visit.restaurant?.name) {
-                Section {
-                    LoyaltyNudgeCard(program: program, visitCount: restaurantVisitCount)
-                }
-            }
-
+            // Photos up top — the first thing you want when recalling a visit.
             if !ateFoodPhotos.isEmpty || !dishesAllProcessed {
                 Section("What you ate here") {
                     if ateFoodPhotos.isEmpty {
@@ -128,6 +95,98 @@ struct VisitDetailView: View {
                     }
                 }
                 .listRowInsets(EdgeInsets())
+            }
+
+            if !visit.photos.isEmpty {
+                Section("Photos") {
+                    LazyVGrid(columns: columns, spacing: 4) {
+                        ForEach(visit.photos, id: \.localIdentifier) { photo in
+                            // A clear 1:1 square defines a deterministic cell size (width == height),
+                            // with the photo overlaid and clipped. This avoids the unbounded
+                            // ".aspectRatio(.fill)" that can trigger a UICollectionView layout loop.
+                            Color.clear
+                                .frame(height: 110)
+                                .overlay {
+                                    PhotoThumbnailView(
+                                        localIdentifier: photo.localIdentifier,
+                                        targetSize: CGSize(width: 300, height: 300)
+                                    )
+                                }
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                                .overlay(alignment: .topLeading) {
+                                    if visit.coverPhoto?.localIdentifier == photo.localIdentifier {
+                                        Image(systemName: "star.fill")
+                                            .font(.caption2)
+                                            .foregroundStyle(.white)
+                                            .padding(4)
+                                            .background(Color.accentColor, in: Circle())
+                                            .padding(4)
+                                    }
+                                }
+                                .overlay(alignment: .bottomTrailing) {
+                                    if photo.isVideo {
+                                        Image(systemName: "play.circle.fill")
+                                            .font(.body)
+                                            .foregroundStyle(.white)
+                                            .shadow(radius: 2)
+                                            .padding(5)
+                                    }
+                                }
+                                .contentShape(RoundedRectangle(cornerRadius: 6))
+                                .onTapGesture { viewerPhotoID = photo.localIdentifier }
+                        }
+                    }
+                }
+                .listRowInsets(EdgeInsets())
+            }
+
+            Section("Place") {
+                if let r = visit.restaurant {
+                    RestaurantNameLabel(restaurant: r, logoSize: 24)
+                    if let addr = r.address { Text(addr).font(.caption).foregroundStyle(.secondary) }
+                    if let apple = r.appleMapsURL {
+                        Link(destination: apple) {
+                            Label("Open in Apple Maps", systemImage: "map")
+                        }
+                    }
+                    if let google = r.googleMapsURL {
+                        Link(destination: google) {
+                            Label("Open in Google Maps", systemImage: "mappin.and.ellipse")
+                        }
+                    }
+                } else {
+                    Text("Unknown restaurant").foregroundStyle(.secondary)
+                }
+                Text(visit.date.formatted(date: .complete, time: .shortened))
+                    .font(.caption)
+
+                if let amount = visit.amount {
+                    Label(
+                        amount.formatted(.currency(code: visit.currencyCode ?? "USD")),
+                        systemImage: "creditcard"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+            }
+
+            // Recall past meals at this place without leaving the entry.
+            if !otherVisits.isEmpty {
+                Section("More visits here") {
+                    ForEach(otherVisits) { other in
+                        NavigationLink {
+                            VisitDetailView(visit: other)
+                        } label: {
+                            otherVisitRow(other)
+                        }
+                    }
+                }
+            }
+
+            if let program = LoyaltyDirectory.program(for: visit.restaurant?.name) {
+                Section {
+                    LoyaltyNudgeCard(program: program, visitCount: restaurantVisitCount)
+                }
             }
 
             Section("Occasion") {
@@ -181,47 +240,14 @@ struct VisitDetailView: View {
                 }
             }
 
-            if !visit.photos.isEmpty {
-                Section("Photos") {
-                    LazyVGrid(columns: columns, spacing: 4) {
-                        ForEach(visit.photos, id: \.localIdentifier) { photo in
-                            // A clear 1:1 square defines a deterministic cell size (width == height),
-                            // with the photo overlaid and clipped. This avoids the unbounded
-                            // ".aspectRatio(.fill)" that can trigger a UICollectionView layout loop.
-                            Color.clear
-                                .frame(height: 110)
-                                .overlay {
-                                    PhotoThumbnailView(
-                                        localIdentifier: photo.localIdentifier,
-                                        targetSize: CGSize(width: 300, height: 300)
-                                    )
-                                }
-                                .clipShape(RoundedRectangle(cornerRadius: 6))
-                                .overlay(alignment: .topLeading) {
-                                    if visit.coverPhoto?.localIdentifier == photo.localIdentifier {
-                                        Image(systemName: "star.fill")
-                                            .font(.caption2)
-                                            .foregroundStyle(.white)
-                                            .padding(4)
-                                            .background(Color.accentColor, in: Circle())
-                                            .padding(4)
-                                    }
-                                }
-                                .overlay(alignment: .bottomTrailing) {
-                                    if photo.isVideo {
-                                        Image(systemName: "play.circle.fill")
-                                            .font(.body)
-                                            .foregroundStyle(.white)
-                                            .shadow(radius: 2)
-                                            .padding(5)
-                                    }
-                                }
-                                .contentShape(RoundedRectangle(cornerRadius: 6))
-                                .onTapGesture { viewerPhotoID = photo.localIdentifier }
-                        }
-                    }
+            // Corrections live near the bottom, out of the main flow.
+            Section {
+                Button {
+                    showingEditPlace = true
+                } label: {
+                    Label(visit.restaurant == nil ? "Set place" : "Wrong place? Change it",
+                          systemImage: "mappin.and.ellipse")
                 }
-                .listRowInsets(EdgeInsets())
             }
 
             if let restaurant = visit.restaurant {
@@ -323,6 +349,36 @@ struct VisitDetailView: View {
             .opacity(selected || visit.rating == nil ? 1 : 0.6)
         }
         .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private func otherVisitRow(_ other: Visit) -> some View {
+        HStack(spacing: 12) {
+            if let cover = other.coverPhoto {
+                PhotoThumbnailView(
+                    localIdentifier: cover.localIdentifier,
+                    targetSize: CGSize(width: 100, height: 100),
+                    fallbackData: other.coverThumbnailData
+                )
+                .frame(width: 44, height: 44)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+            } else {
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.gray.opacity(0.12))
+                    .frame(width: 44, height: 44)
+                    .overlay(Image(systemName: "fork.knife").foregroundStyle(.secondary))
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(other.date.formatted(date: .abbreviated, time: .omitted))
+                if let occasion = other.occasion, !occasion.isEmpty {
+                    Text(occasion).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+            }
+            Spacer()
+            if let rating = other.rating {
+                Text(rating.emoji)
+            }
+        }
     }
 
     private func deleteVoiceNotes(_ offsets: IndexSet) {
