@@ -100,7 +100,9 @@ final class GeoLookupCoordinator {
         } else {
             context.insert(CachedPlaceLookup(bucketKey: key, candidatesData: data))
         }
-        try? context.save()
+        // No save here: during a scan the batched save flushes this too, avoiding a save (and CloudKit
+        // mirroring pass) per new place. The in-memory cache covers reads until then; the row persists
+        // on the next context save.
     }
 
     /// Drop the in-memory cache (the on-disk rows are cleared separately, e.g. by DataResetService).

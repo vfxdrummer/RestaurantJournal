@@ -161,6 +161,7 @@ final class VisitDiscoveryService {
             //   • Consumer (matching): resolves a place + creates a visit per queued cluster. This is
             //     the rate-limited step; throttling paces it without freezing screening.
             let screening = Task { @MainActor in
+                var sinceSave = 0
                 for cluster in clusters {
                     await self.waitWhilePaused()
                     if self.isCancelled { break }
@@ -208,13 +209,23 @@ final class VisitDiscoveryService {
                         self.diningQueue.append(cluster)
                         self.matchTotal += 1
                     }
-                    try? context.save()
+                    // Save in batches: a per-cluster save flushes the whole context (CloudKit
+                    // mirroring + a journal-list re-render on the main actor), which starves this
+                    // fast Vision loop. Screening records are a rebuildable cache, so a coarse batch
+                    // is fine — anything unsaved on interruption is just re-screened next time.
+                    sinceSave += 1
+                    if sinceSave >= 20 {
+                        try? context.save()
+                        sinceSave = 0
+                    }
                 }
+                try? context.save()   // flush the final partial batch
                 self.screeningFinished = true
             }
 
             let matching = Task { @MainActor in
                 var index = 0
+                var sinceSave = 0
                 while !self.isCancelled {
                     await self.waitWhilePaused()
                     if index < self.diningQueue.count {
@@ -222,13 +233,19 @@ final class VisitDiscoveryService {
                         index += 1
                         await self.resolvePlace(for: cluster, in: context)
                         self.matchProcessed += 1
-                        try? context.save()
+                        // Batch here too so matching's saves don't hammer the main actor.
+                        sinceSave += 1
+                        if sinceSave >= 5 {
+                            try? context.save()
+                            sinceSave = 0
+                        }
                     } else if self.screeningFinished {
                         break   // no more coming
                     } else {
                         try? await Task.sleep(nanoseconds: 80_000_000)   // wait for the producer
                     }
                 }
+                try? context.save()   // flush remaining matches
             }
 
             await screening.value
