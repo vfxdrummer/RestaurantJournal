@@ -65,14 +65,17 @@ struct RestaurantJournalApp: App {
                 recordSetupError("two-store", error)
             }
 
-            // Attempt 2 — single store, everything in CloudKit. All models are CloudKit-compatible, so
-            // this isolates whether the multi-store setup is what fails. (If this is what ends up used,
-            // the device-specific caches sync too — we'd move them back local once sync is confirmed.)
+            // Attempt 2 — canonical single-store CloudKit: a schemaless configuration applied to all
+            // types (the standard NSPersistentCloudKitContainer setup). This differs from attempt 1 in
+            // construction, so it isolates whether the multi-store schema wiring is what fails.
             do {
-                let unified = ModelConfiguration(
-                    "Unified", schema: fullSchema, cloudKitDatabase: .private(cloudKitContainerID)
+                let config = ModelConfiguration(cloudKitDatabase: .private(cloudKitContainerID))
+                let container = try ModelContainer(
+                    for: Restaurant.self, Visit.self, PhotoAsset.self, VoiceNote.self,
+                        Person.self, DetectedFace.self,
+                        ScreenedPhoto.self, EstablishmentLogo.self, FaceScannedPhoto.self,
+                    configurations: config
                 )
-                let container = try ModelContainer(for: fullSchema, configurations: unified)
                 isCloudKitActive = true
                 cloudKitStoreMode = "single-store"
                 print("[iCloudSync] CloudKit active: single-store (two-store failed)")
