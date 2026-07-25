@@ -10,7 +10,7 @@
 	</array>
 	<key>com.apple.developer.icloud-container-identifiers</key>
 	<array>
-		<string>iCloud.com.vfxdrummer.RestaurantJourna</string>
+		<string>iCloud.vfxdrummer.RestaurantJournal</string>
 	</array>
 	<key>com.apple.developer.icloud-services</key>
 	<array>
