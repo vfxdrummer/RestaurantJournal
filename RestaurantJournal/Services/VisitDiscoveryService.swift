@@ -218,7 +218,15 @@ final class VisitDiscoveryService {
 
                         // Don't re-add photos the target visit already has (dedupe on rescan/restore).
                         let alreadyAttached = Set(target.photos.map(\.localIdentifier))
-                        for asset in cluster.assets where !alreadyAttached.contains(asset.localIdentifier) {
+                        let newAssets = cluster.assets.filter { !alreadyAttached.contains($0.localIdentifier) }
+                        // Capture cloud identifiers now so they sync *with* the visit. Otherwise a
+                        // second device can receive the visit before the identifiers are backfilled
+                        // and be unable to re-link the photos (shows empty tiles). No-op when iCloud
+                        // Photos is off.
+                        let cloudIDs = await PhotoLibraryLinker.cloudIdentifiers(
+                            forLocalIdentifiers: newAssets.map(\.localIdentifier)
+                        )
+                        for asset in newAssets {
                             let photo = PhotoAsset(
                                 localIdentifier: asset.localIdentifier,
                                 takenAt: asset.creationDate ?? cluster.startDate,
@@ -226,6 +234,7 @@ final class VisitDiscoveryService {
                                 longitude: asset.location?.coordinate.longitude,
                                 isVideo: asset.mediaType == .video
                             )
+                            photo.photoCloudIdentifier = cloudIDs[asset.localIdentifier]
                             photo.visit = target
                             context.insert(photo)
                         }
