@@ -186,7 +186,11 @@ final class VisitDiscoveryService {
                         // If the same meal was split across scans (same place, minutes apart), fold
                         // the new photos into that recent visit instead of creating a duplicate.
                         let target: Visit
-                        if let existing = mergeableVisit(for: restaurant, cluster: cluster) {
+                        if let claimed = visitClaimingAnyPhoto(in: cluster, context: context) {
+                            // One of these photos already belongs to a visit — e.g. this visit was
+                            // restored from iCloud and we're rescanning. Reuse it; never duplicate.
+                            target = claimed
+                        } else if let existing = mergeableVisit(for: restaurant, cluster: cluster) {
                             target = existing
                         } else {
                             let visit = Visit(
@@ -205,7 +209,9 @@ final class VisitDiscoveryService {
                             ])
                         }
 
-                        for asset in cluster.assets {
+                        // Don't re-add photos the target visit already has (dedupe on rescan/restore).
+                        let alreadyAttached = Set(target.photos.map(\.localIdentifier))
+                        for asset in cluster.assets where !alreadyAttached.contains(asset.localIdentifier) {
                             let photo = PhotoAsset(
                                 localIdentifier: asset.localIdentifier,
                                 takenAt: asset.creationDate ?? cluster.startDate,
@@ -302,6 +308,19 @@ final class VisitDiscoveryService {
             )
             return gap <= gapLimit
         }
+    }
+
+    /// The live visit that already owns one of this cluster's photos, if any — so a rescan (e.g.
+    /// after an iCloud restore repopulated visits) reuses it instead of creating a duplicate.
+    private func visitClaimingAnyPhoto(in cluster: PhotoCluster, context: ModelContext) -> Visit? {
+        let ids = cluster.assets.map(\.localIdentifier)
+        guard !ids.isEmpty else { return nil }
+        var descriptor = FetchDescriptor<PhotoAsset>(
+            predicate: #Predicate { ids.contains($0.localIdentifier) }
+        )
+        descriptor.fetchLimit = 10
+        guard let matches = try? context.fetch(descriptor) else { return nil }
+        return matches.lazy.compactMap { $0.visit }.first { $0.deletedAt == nil }
     }
 
     private func loadImportedIDs(in context: ModelContext) throws -> Set<String> {

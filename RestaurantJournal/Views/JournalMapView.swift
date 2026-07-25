@@ -428,7 +428,8 @@ private struct RestaurantVisitsView: View {
                         if let photo = visit.coverPhoto {
                             PhotoThumbnailView(
                                 localIdentifier: photo.localIdentifier,
-                                targetSize: CGSize(width: 120, height: 120)
+                                targetSize: CGSize(width: 120, height: 120),
+                                fallbackData: visit.coverThumbnailData
                             )
                             .frame(width: 50, height: 50)
                             .clipShape(RoundedRectangle(cornerRadius: 8))

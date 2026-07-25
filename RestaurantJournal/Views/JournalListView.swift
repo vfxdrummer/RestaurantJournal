@@ -378,7 +378,8 @@ struct JournalListView: View {
             if let photo = visit.coverPhoto {
                 PhotoThumbnailView(
                     localIdentifier: photo.localIdentifier,
-                    targetSize: CGSize(width: 120, height: 120)
+                    targetSize: CGSize(width: 120, height: 120),
+                    fallbackData: visit.coverThumbnailData
                 )
                 .frame(width: 55, height: 55)
                 .clipShape(RoundedRectangle(cornerRadius: 8))

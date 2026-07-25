@@ -2,6 +2,7 @@ import SwiftUI
 
 /// Wraps the app in a branded splash that fades away shortly after launch.
 struct AppRootView: View {
+    @Environment(\.modelContext) private var modelContext
     @State private var showSplash = true
 
     var body: some View {
@@ -17,6 +18,11 @@ struct AppRootView: View {
             // Snappy fade-in, then a comfortable hold before dismissing.
             try? await Task.sleep(nanoseconds: 2_600_000_000)
             withAnimation(.easeInOut(duration: 0.55)) { showSplash = false }
+        }
+        .task {
+            // Keep iCloud-restore resilient: re-link restored photos, capture cloud identifiers, and
+            // backfill cover thumbnails. Bounded and self-quiescing, so it's cheap on later launches.
+            await SyncMaintenance.run(context: modelContext)
         }
     }
 }
