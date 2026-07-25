@@ -160,6 +160,9 @@ struct JournalListView: View {
             .onChange(of: scanner.phase) { _, phase in
                 guard phase == .finished else { return }
                 // (scan_completed is logged in VisitDiscoveryService with the full funnel.)
+                // Now that the scan is idle, run iCloud maintenance (cloud-id + thumbnail backfill for
+                // the new visits) — it deferred while the scan held the context.
+                Task { await SyncMaintenance.run(context: modelContext) }
                 // Once a scan finishes without error, the onboarding scan is done — later scans
                 // (including Rescan All) may be cancelled from then on.
                 if scanner.errorMessage == nil { hasCompletedInitialScan = true }

@@ -34,6 +34,11 @@ final class VisitDiscoveryService {
     var progress: Double { total > 0 ? Double(processed) / Double(total) : 0 }
     var isBusy: Bool { phase == .scanning || phase == .paused }
 
+    /// True while *any* scan is running. Read by background maintenance (`SyncMaintenance`) so it
+    /// never mutates the shared model context at the same time as a scan — concurrent saves can throw
+    /// and cut a scan short. Set only inside `scan(in:)`.
+    @MainActor private(set) static var isScanning = false
+
     // MARK: - Pause state (not observed)
 
     @ObservationIgnored private var isPaused = false
@@ -82,6 +87,8 @@ final class VisitDiscoveryService {
 
     func scan(in context: ModelContext, fullRescan: Bool = false) async {
         guard !isBusy else { return }
+        Self.isScanning = true
+        defer { Self.isScanning = false }
 
         phase = .scanning
         processed = 0
