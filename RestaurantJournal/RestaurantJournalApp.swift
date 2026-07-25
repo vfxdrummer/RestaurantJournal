@@ -37,7 +37,7 @@ struct RestaurantJournalApp: App {
             Person.self, DetectedFace.self
         ]
         let localTypes: [any PersistentModel.Type] = [
-            ScreenedPhoto.self, EstablishmentLogo.self, FaceScannedPhoto.self
+            ScreenedPhoto.self, EstablishmentLogo.self, FaceScannedPhoto.self, CachedPlaceLookup.self
         ]
         let journalSchema = Schema(journalTypes)
         let localSchema = Schema(localTypes)

@@ -340,6 +340,24 @@ final class DetectedFace {
     }
 }
 
+/// Persistent cache of a place lookup, keyed by a coarse (~110m) coordinate bucket, so a full
+/// rescan — or a later scan — doesn't re-hit MapKit for locations already resolved. Local-only and
+/// rebuildable; entries older than a TTL are re-fetched. Dedup by `bucketKey` is done in code.
+@Model
+final class CachedPlaceLookup {
+    // No unique + defaults, for CloudKit container validation (this store is local-only).
+    var bucketKey: String = ""
+    /// JSON-encoded `[RestaurantCandidate]` resolved for this bucket.
+    var candidatesData: Data?
+    var cachedAt: Date = Date()
+
+    init(bucketKey: String, candidatesData: Data?, cachedAt: Date = Date()) {
+        self.bucketKey = bucketKey
+        self.candidatesData = candidatesData
+        self.cachedAt = cachedAt
+    }
+}
+
 /// Marks a photo as already scanned for faces, so a rescan skips it (even if it had no faces).
 @Model
 final class FaceScannedPhoto {

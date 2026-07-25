@@ -1,5 +1,6 @@
 import Foundation
 import MapKit
+import SwiftData
 
 struct RestaurantCandidate: Sendable {
     let name: String
@@ -13,6 +14,44 @@ struct RestaurantCandidate: Sendable {
     let country: String?
 }
 
+// Codable in an extension (keeps the memberwise init) so candidates can be cached on disk.
+// `CLLocationCoordinate2D` isn't Codable, so encode it as latitude/longitude.
+extension RestaurantCandidate: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case name, latitude, longitude, address, mapItemIdentifier, websiteHost, categoryRawValue, city, region, country
+    }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            name: try c.decode(String.self, forKey: .name),
+            coordinate: CLLocationCoordinate2D(
+                latitude: try c.decode(Double.self, forKey: .latitude),
+                longitude: try c.decode(Double.self, forKey: .longitude)
+            ),
+            address: try c.decodeIfPresent(String.self, forKey: .address),
+            mapItemIdentifier: try c.decodeIfPresent(String.self, forKey: .mapItemIdentifier),
+            websiteHost: try c.decodeIfPresent(String.self, forKey: .websiteHost),
+            categoryRawValue: try c.decodeIfPresent(String.self, forKey: .categoryRawValue),
+            city: try c.decodeIfPresent(String.self, forKey: .city),
+            region: try c.decodeIfPresent(String.self, forKey: .region),
+            country: try c.decodeIfPresent(String.self, forKey: .country)
+        )
+    }
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(name, forKey: .name)
+        try c.encode(coordinate.latitude, forKey: .latitude)
+        try c.encode(coordinate.longitude, forKey: .longitude)
+        try c.encodeIfPresent(address, forKey: .address)
+        try c.encodeIfPresent(mapItemIdentifier, forKey: .mapItemIdentifier)
+        try c.encodeIfPresent(websiteHost, forKey: .websiteHost)
+        try c.encodeIfPresent(categoryRawValue, forKey: .categoryRawValue)
+        try c.encodeIfPresent(city, forKey: .city)
+        try c.encodeIfPresent(region, forKey: .region)
+        try c.encodeIfPresent(country, forKey: .country)
+    }
+}
+
 /// Serializes MapKit spatial lookups so a scan stays under Apple's ~50-requests/60s throttle, and
 /// caches results by ~110m location bucket so the many clusters at one restaurant reuse a single
 /// request. Observable so the UI can show when matching is paused waiting on the throttle.
@@ -24,13 +63,48 @@ final class GeoLookupCoordinator {
     /// True while place matching is paused waiting for MapKit's rate-limit window to free up.
     private(set) var isThrottled = false
 
+    /// Set once at launch — enables the on-disk cache (`CachedPlaceLookup`) so results survive
+    /// relaunches (e.g. a later "Rescan all" doesn't re-hit MapKit for known places).
+    @ObservationIgnored var context: ModelContext?
+
     @ObservationIgnored private var cache: [String: [RestaurantCandidate]] = [:]
     @ObservationIgnored private var timestamps: [Date] = []
     @ObservationIgnored private let maxRequests = 45           // safely under Apple's 50
     @ObservationIgnored private let window: TimeInterval = 60
+    @ObservationIgnored private let maxCacheAge: TimeInterval = 90 * 24 * 60 * 60   // 90 days
 
-    func cached(_ key: String) -> [RestaurantCandidate]? { cache[key] }
-    func store(_ key: String, _ value: [RestaurantCandidate]) { cache[key] = value }
+    /// In-memory first, then the on-disk cache (which warms memory). Nil = a fresh lookup is needed.
+    func cached(_ key: String) -> [RestaurantCandidate]? {
+        if let hit = cache[key] { return hit }
+        guard let context else { return nil }
+        var descriptor = FetchDescriptor<CachedPlaceLookup>(predicate: #Predicate { $0.bucketKey == key })
+        descriptor.fetchLimit = 1
+        guard let record = try? context.fetch(descriptor).first,
+              Date().timeIntervalSince(record.cachedAt) < maxCacheAge,
+              let data = record.candidatesData,
+              let candidates = try? JSONDecoder().decode([RestaurantCandidate].self, from: data)
+        else { return nil }
+        cache[key] = candidates
+        return candidates
+    }
+
+    func store(_ key: String, _ value: [RestaurantCandidate]) {
+        cache[key] = value
+        guard let context else { return }
+        let data = try? JSONEncoder().encode(value)
+        var descriptor = FetchDescriptor<CachedPlaceLookup>(predicate: #Predicate { $0.bucketKey == key })
+        descriptor.fetchLimit = 1
+        if let existing = try? context.fetch(descriptor).first {
+            existing.candidatesData = data
+            existing.cachedAt = Date()
+        } else {
+            context.insert(CachedPlaceLookup(bucketKey: key, candidatesData: data))
+        }
+        try? context.save()
+    }
+
+    /// Drop the in-memory cache (the on-disk rows are cleared separately, e.g. by DataResetService).
+    func clearCache() { cache = [:] }
 
     /// Block until another spatial request can be made without exceeding the rolling window.
     func reserveSlot() async {
