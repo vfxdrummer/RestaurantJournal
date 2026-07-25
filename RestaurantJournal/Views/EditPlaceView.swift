@@ -194,7 +194,7 @@ struct EditPlaceView: View {
         isLoading = true
         defer { isLoading = false }
         guard let coordinate = visit.lookupCoordinate else { return }
-        candidates = await RestaurantLookupService.lookup(near: coordinate)
+        candidates = await RestaurantLookupService.lookup(near: coordinate, in: modelContext)
     }
 
     private func previewSuggestion(_ completion: MKLocalSearchCompletion) async {

@@ -23,7 +23,6 @@ enum DataResetService {
 
         removeVoiceFiles()
         EstablishmentLogoStore.clearMemoryCache()
-        GeoLookupCoordinator.shared.clearCache()
     }
 
     /// Remove the recorded `voice_*.m4a` files from the Documents directory.

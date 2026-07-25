@@ -1,6 +1,7 @@
 import Foundation
 import MapKit
 import SwiftData
+import CoreLocation
 
 struct RestaurantCandidate: Sendable {
     let name: String
@@ -52,9 +53,9 @@ extension RestaurantCandidate: Codable {
     }
 }
 
-/// Serializes MapKit spatial lookups so a scan stays under Apple's ~50-requests/60s throttle, and
-/// caches results by ~110m location bucket so the many clusters at one restaurant reuse a single
-/// request. Observable so the UI can show when matching is paused waiting on the throttle.
+/// Rate-limits MapKit spatial lookups so a scan stays under Apple's ~50-requests/60s throttle.
+/// Observable so the UI can show when matching is paused waiting on the throttle. Kept tiny and
+/// main-actor so both the UI and the background scan can await `reserveSlot()`.
 @MainActor
 @Observable
 final class GeoLookupCoordinator {
@@ -63,50 +64,9 @@ final class GeoLookupCoordinator {
     /// True while place matching is paused waiting for MapKit's rate-limit window to free up.
     private(set) var isThrottled = false
 
-    /// Set once at launch — enables the on-disk cache (`CachedPlaceLookup`) so results survive
-    /// relaunches (e.g. a later "Rescan all" doesn't re-hit MapKit for known places).
-    @ObservationIgnored var context: ModelContext?
-
-    @ObservationIgnored private var cache: [String: [RestaurantCandidate]] = [:]
     @ObservationIgnored private var timestamps: [Date] = []
     @ObservationIgnored private let maxRequests = 45           // safely under Apple's 50
     @ObservationIgnored private let window: TimeInterval = 60
-    @ObservationIgnored private let maxCacheAge: TimeInterval = 90 * 24 * 60 * 60   // 90 days
-
-    /// In-memory first, then the on-disk cache (which warms memory). Nil = a fresh lookup is needed.
-    func cached(_ key: String) -> [RestaurantCandidate]? {
-        if let hit = cache[key] { return hit }
-        guard let context else { return nil }
-        var descriptor = FetchDescriptor<CachedPlaceLookup>(predicate: #Predicate { $0.bucketKey == key })
-        descriptor.fetchLimit = 1
-        guard let record = try? context.fetch(descriptor).first,
-              Date().timeIntervalSince(record.cachedAt) < maxCacheAge,
-              let data = record.candidatesData,
-              let candidates = try? JSONDecoder().decode([RestaurantCandidate].self, from: data)
-        else { return nil }
-        cache[key] = candidates
-        return candidates
-    }
-
-    func store(_ key: String, _ value: [RestaurantCandidate]) {
-        cache[key] = value
-        guard let context else { return }
-        let data = try? JSONEncoder().encode(value)
-        var descriptor = FetchDescriptor<CachedPlaceLookup>(predicate: #Predicate { $0.bucketKey == key })
-        descriptor.fetchLimit = 1
-        if let existing = try? context.fetch(descriptor).first {
-            existing.candidatesData = data
-            existing.cachedAt = Date()
-        } else {
-            context.insert(CachedPlaceLookup(bucketKey: key, candidatesData: data))
-        }
-        // No save here: during a scan the batched save flushes this too, avoiding a save (and CloudKit
-        // mirroring pass) per new place. The in-memory cache covers reads until then; the row persists
-        // on the next context save.
-    }
-
-    /// Drop the in-memory cache (the on-disk rows are cleared separately, e.g. by DataResetService).
-    func clearCache() { cache = [:] }
 
     /// Block until another spatial request can be made without exceeding the rolling window.
     func reserveSlot() async {
@@ -131,15 +91,61 @@ final class GeoLookupCoordinator {
     }
 }
 
-enum RestaurantLookupService {
-    /// Search food-related POIs near a coordinate; return best candidate + alternatives. Cached by
-    /// location, rate-limited, and retried on throttling so a big scan never silently drops matches.
-    static func lookup(near coordinate: CLLocationCoordinate2D) async -> [RestaurantCandidate] {
-        let key = cacheKey(for: coordinate)
-        if let cached = await GeoLookupCoordinator.shared.cached(key) {
-            return cached
-        }
+/// On-disk cache of place lookups (`CachedPlaceLookup`), keyed by a ~110m coordinate bucket, so a
+/// full rescan doesn't re-hit MapKit for known places. Synchronous and context-agnostic (no save —
+/// the caller's batched save persists it), so it works on the scan's background context or the main
+/// context alike.
+enum PlaceLookupCache {
+    static let maxAge: TimeInterval = 90 * 24 * 60 * 60   // 90 days
 
+    static func read(_ key: String, in context: ModelContext) -> [RestaurantCandidate]? {
+        var descriptor = FetchDescriptor<CachedPlaceLookup>(predicate: #Predicate { $0.bucketKey == key })
+        descriptor.fetchLimit = 1
+        guard let record = try? context.fetch(descriptor).first,
+              Date().timeIntervalSince(record.cachedAt) < maxAge,
+              let data = record.candidatesData,
+              let candidates = try? JSONDecoder().decode([RestaurantCandidate].self, from: data)
+        else { return nil }
+        return candidates
+    }
+
+    static func write(_ key: String, _ value: [RestaurantCandidate], in context: ModelContext) {
+        let data = try? JSONEncoder().encode(value)
+        var descriptor = FetchDescriptor<CachedPlaceLookup>(predicate: #Predicate { $0.bucketKey == key })
+        descriptor.fetchLimit = 1
+        if let existing = try? context.fetch(descriptor).first {
+            existing.candidatesData = data
+            existing.cachedAt = Date()
+        } else {
+            context.insert(CachedPlaceLookup(bucketKey: key, candidatesData: data))
+        }
+        // No save: the caller's batched save persists this too, avoiding a save (and CloudKit pass)
+        // per new place.
+    }
+}
+
+enum RestaurantLookupService {
+    /// ~110m buckets (3 decimal places) so clusters at the same place share one lookup.
+    static func bucketKey(for c: CLLocationCoordinate2D) -> String {
+        String(format: "%.3f,%.3f", c.latitude, c.longitude)
+    }
+
+    /// Full flow with the on-disk cache (read → search → write + save). For one-off callers off the
+    /// scan path (e.g. correcting a place); the scan engine caches with its own context instead.
+    static func lookup(near coordinate: CLLocationCoordinate2D, in context: ModelContext) async -> [RestaurantCandidate] {
+        let key = bucketKey(for: coordinate)
+        if let hit = PlaceLookupCache.read(key, in: context) { return hit }
+        let result = await search(near: coordinate)
+        if !result.isEmpty {
+            PlaceLookupCache.write(key, result, in: context)
+            try? context.save()
+        }
+        return result
+    }
+
+    /// Raw, rate-limited MapKit search (no cache) — retried on throttling so a big scan never
+    /// silently drops matches. The caller handles caching.
+    static func search(near coordinate: CLLocationCoordinate2D) async -> [RestaurantCandidate] {
         let request = MKLocalPointsOfInterestRequest(center: coordinate, radius: 100)
         request.pointOfInterestFilter = MKPointOfInterestFilter(including: [
             .restaurant, .cafe, .bakery, .brewery, .winery, .foodMarket
@@ -155,12 +161,10 @@ enum RestaurantLookupService {
                     let bLoc = b.placemark.location ?? origin
                     return origin.distance(from: aLoc) < origin.distance(from: bLoc)
                 }
-                let candidates = sorted.map(candidate(from:))
-                await GeoLookupCoordinator.shared.store(key, candidates)
-                return candidates
+                return sorted.map(candidate(from:))
             } catch {
-                // On a throttle error, wait for the window to reset and retry rather than dropping
-                // the match; on any other error (or once out of retries), give up quietly.
+                // On a throttle error wait for the window to reset and retry rather than dropping the
+                // match; on any other error (or once out of retries), give up quietly.
                 if let reset = throttleResetSeconds(from: error), attempt < 2 {
                     try? await Task.sleep(nanoseconds: UInt64((reset + 0.5) * 1_000_000_000))
                     continue
@@ -169,11 +173,6 @@ enum RestaurantLookupService {
             }
         }
         return []
-    }
-
-    /// ~110m buckets (3 decimal places) so clusters at the same place share one lookup.
-    private static func cacheKey(for c: CLLocationCoordinate2D) -> String {
-        String(format: "%.3f,%.3f", c.latitude, c.longitude)
     }
 
     /// Seconds until MapKit's throttle window resets, if `error` is a throttle; nil otherwise.
