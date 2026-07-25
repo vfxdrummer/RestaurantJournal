@@ -51,9 +51,13 @@ struct CloudBackupSectionView: View {
     }
 
     private var syncTitle: String {
+        // Honesty first: if the store didn't actually init with CloudKit, say so — a green
+        // "backing up" when we're really local-only is what sent us chasing ghosts.
+        if !RestaurantJournalApp.isCloudKitActive { return "iCloud sync not active" }
+        if sync.isSyncing { return "Backing up to iCloud…" }
         switch sync.account {
         case .checking: return "Checking iCloud…"
-        case .available: return sync.lastErrorMessage == nil ? "Backing up to iCloud" : "Backup issue"
+        case .available: return sync.lastErrorMessage == nil ? "Backed up to iCloud" : "Backup issue"
         case .noAccount: return "Not signed in to iCloud"
         case .restricted: return "iCloud is restricted"
         case .unavailable: return "iCloud unavailable"
@@ -61,6 +65,13 @@ struct CloudBackupSectionView: View {
     }
 
     private var syncSubtitle: String? {
+        if !RestaurantJournalApp.isCloudKitActive {
+            return RestaurantJournalApp.cloudKitSetupError
+                ?? "This build isn't syncing. Add the iCloud → CloudKit capability in Xcode and reinstall."
+        }
+        if sync.isSyncing {
+            return "The first backup can take a few minutes. You can leave this open."
+        }
         switch sync.account {
         case .checking:
             return nil
@@ -69,7 +80,7 @@ struct CloudBackupSectionView: View {
             if let date = sync.lastSyncDate {
                 return "Last backed up \(date.formatted(.relative(presentation: .named)))."
             }
-            return "Your journal syncs automatically."
+            return "Waiting for first sync…"
         case .noAccount:
             return "Sign in to iCloud in the Settings app to back up and restore your journal."
         case .restricted:
@@ -80,6 +91,8 @@ struct CloudBackupSectionView: View {
     }
 
     private var syncIcon: String {
+        if !RestaurantJournalApp.isCloudKitActive { return "icloud.slash" }
+        if sync.isSyncing { return "arrow.clockwise.icloud" }
         switch sync.account {
         case .checking: return "arrow.triangle.2.circlepath.icloud"
         case .available: return sync.lastErrorMessage == nil ? "checkmark.icloud" : "exclamationmark.icloud"
@@ -89,6 +102,8 @@ struct CloudBackupSectionView: View {
     }
 
     private var syncTint: Color {
+        if !RestaurantJournalApp.isCloudKitActive { return .orange }
+        if sync.isSyncing { return .blue }
         switch sync.account {
         case .available where sync.lastErrorMessage == nil: return .green
         case .checking: return .secondary

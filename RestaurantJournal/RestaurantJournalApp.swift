@@ -9,6 +9,13 @@ struct RestaurantJournalApp: App {
     /// Signing & Capabilities → iCloud → CloudKit in Xcode.
     static let cloudKitContainerID = "iCloud.com.vfxdrummer.RestaurantJournal"
 
+    /// Whether the journal store actually initialized **with CloudKit** (vs. silently falling back to
+    /// local-only). The iCloud *account* status alone doesn't reveal this — so we surface it in
+    /// Settings to avoid a green "backing up" that isn't really syncing.
+    private(set) static var isCloudKitActive = false
+    /// If CloudKit init failed and we fell back to local-only, the reason (for diagnostics).
+    private(set) static var cloudKitSetupError: String?
+
     /// Builds a two-store container:
     ///  • **Journal** — the irreplaceable user data, synced to the user's private iCloud.
     ///  • **Local**   — rebuildable Vision/logo caches, kept on-device (they use `@Attribute(.unique)`,
@@ -42,8 +49,16 @@ struct RestaurantJournalApp: App {
                 "Journal", schema: journalSchema,
                 cloudKitDatabase: .private(cloudKitContainerID)
             )
-            if let container = try? ModelContainer(for: fullSchema, configurations: cloudJournal, local) {
+            do {
+                let container = try ModelContainer(for: fullSchema, configurations: cloudJournal, local)
+                isCloudKitActive = true
+                print("[iCloudSync] CloudKit store active (\(cloudKitContainerID))")
                 return container
+            } catch {
+                // Don't swallow it — record why so Settings can show "sync inactive" instead of a
+                // misleading green, and log it for debugging.
+                cloudKitSetupError = error.localizedDescription
+                print("[iCloudSync] CloudKit init FAILED, falling back to local-only: \(error)")
             }
         }
 
