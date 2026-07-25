@@ -29,6 +29,9 @@ struct AppRootView: View {
             withAnimation(.easeInOut(duration: 0.55)) { showSplash = false }
         }
         .task {
+            // One-time: migrate a pre-sync install's local journal into the synced store (no-op after,
+            // and when there's nothing to migrate).
+            LegacyStoreMigration.migrateIfNeeded(into: modelContext)
             // Keep iCloud-restore resilient: re-link restored photos, capture cloud identifiers, and
             // backfill cover thumbnails. Bounded and self-quiescing, so it's cheap on later launches.
             await SyncMaintenance.run(context: modelContext)
