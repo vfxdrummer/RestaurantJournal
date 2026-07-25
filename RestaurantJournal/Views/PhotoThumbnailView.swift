@@ -8,6 +8,7 @@ struct PhotoThumbnailView: View {
     var fallbackData: Data? = nil
 
     @State private var image: UIImage?
+    @State private var didFinishLoading = false
 
     var body: some View {
         Group {
@@ -19,6 +20,12 @@ struct PhotoThumbnailView: View {
                 Image(uiImage: fallback)
                     .resizable()
                     .scaledToFill()
+            } else if didFinishLoading {
+                // The photo isn't on this device (e.g. synced from another iPhone that doesn't share
+                // its iCloud Photo Library). A calm placeholder beats an endless spinner.
+                Rectangle()
+                    .fill(Color.gray.opacity(0.15))
+                    .overlay(Image(systemName: "photo").foregroundStyle(.secondary))
             } else {
                 Rectangle()
                     .fill(Color.gray.opacity(0.2))
@@ -26,6 +33,7 @@ struct PhotoThumbnailView: View {
             }
         }
         .task(id: localIdentifier) {
+            didFinishLoading = false
             // Only replace the fallback if the live photo actually loads (don't clear to nil).
             if let loaded = await PhotoThumbnailLoader.loadThumbnail(
                 localIdentifier: localIdentifier,
@@ -33,6 +41,7 @@ struct PhotoThumbnailView: View {
             ) {
                 image = loaded
             }
+            didFinishLoading = true
         }
     }
 }

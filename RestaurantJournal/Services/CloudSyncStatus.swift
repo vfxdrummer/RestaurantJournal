@@ -21,7 +21,13 @@ final class CloudSyncStatus {
 
     private(set) var account: Account = .checking
     private(set) var isSyncing = false
+    /// True while a CloudKit *import* (download) is in flight — drives the "Syncing with iCloud…"
+    /// banner during a restore, without flickering on the frequent small uploads.
+    private(set) var isImporting = false
     private(set) var lastSyncDate: Date?
+    /// Set when a CloudKit *import* (download) completes — used to re-run photo re-linking once new
+    /// data has actually arrived on this device (e.g. a fresh install pulling a journal down).
+    private(set) var lastImportDate: Date?
     private(set) var lastErrorMessage: String?
 
     private var eventObserver: NSObjectProtocol?
@@ -72,14 +78,18 @@ final class CloudSyncStatus {
         // A nil endDate means the operation is still in flight.
         if event.endDate == nil {
             isSyncing = true
+            if event.type == .import { isImporting = true }
             print("[iCloudSync] \(kind) started")
             return
         }
         isSyncing = false
+        if event.type == .import { isImporting = false }
         if event.succeeded {
             lastErrorMessage = nil
-            // Track the last successful *upload* as "backed up".
+            // Track the last successful *upload* as "backed up", and *downloads* so we can re-link
+            // photos once imported data has landed.
             if event.type == .export { lastSyncDate = event.endDate }
+            if event.type == .import { lastImportDate = event.endDate ?? Date() }
             print("[iCloudSync] \(kind) finished OK")
         } else if let error = event.error {
             lastErrorMessage = error.localizedDescription

@@ -15,13 +15,11 @@ import SwiftData
 /// `await` between the check and the save) so a scan can't interleave a conflicting write.
 @MainActor
 enum SyncMaintenance {
-    private static let didRemapKey = "didRemapPhotosAfterRestore"
-
     static func run(context: ModelContext) async {
         // Give an in-progress scan sole ownership of the context; if it's still going after the
-        // wait, defer — the post-scan trigger (or next launch) will pick this up.
+        // wait, defer — the post-scan trigger (or next import) will pick this up.
         guard await waitForScanIdle() else { return }
-        await remapAfterRestoreIfNeeded(context: context)
+        await remapRestoredPhotos(context: context)
         await backfillCloudIdentifiers(context: context)
         await CoverThumbnailService.backfill(context: context)
     }
@@ -37,27 +35,28 @@ enum SyncMaintenance {
         return true
     }
 
-    // MARK: - 1. One-time restore remap
+    // MARK: - 1. Restore remap
 
-    /// On the first launch of a fresh install, re-link photos whose local identifiers came from
-    /// another device. No-op on the device that created the data (identifiers already resolve).
-    private static func remapAfterRestoreIfNeeded(context: ModelContext) async {
-        guard !UserDefaults.standard.bool(forKey: didRemapKey) else { return }
+    /// Re-link photos whose local identifiers came from another device, using the stable cloud
+    /// identifier. Runs at launch and after each CloudKit import, so a journal that arrives on a
+    /// fresh device gets its photos re-linked as the data lands. Self-quiescing: once a photo's
+    /// identifier resolves on this device it's no longer "stale", so there's nothing left to do (and
+    /// it's a no-op on the device that created the data).
+    private static func remapRestoredPhotos(context: ModelContext) async {
         guard !VisitDiscoveryService.isScanning else { return }
 
-        guard let photos = try? context.fetch(FetchDescriptor<PhotoAsset>()) else { return }
+        guard let photos = try? context.fetch(FetchDescriptor<PhotoAsset>()), !photos.isEmpty else { return }
         let allLocalIDs = photos.map(\.localIdentifier).filter { !$0.isEmpty }
 
         // Which of our stored local identifiers are missing on *this* device?
         let present = await PhotoLibraryLinker.existingLocalIdentifiers(from: allLocalIDs)
         let stale = photos.filter { !$0.localIdentifier.isEmpty && !present.contains($0.localIdentifier) }
+        guard !stale.isEmpty else { return }
 
         // Remap the stale ones that carry a cloud identifier.
         let cloudIDs = stale.compactMap(\.photoCloudIdentifier)
-        var cloudToLocal: [String: String] = [:]
-        if !cloudIDs.isEmpty {
-            cloudToLocal = await PhotoLibraryLinker.localIdentifiers(forCloudIdentifiers: cloudIDs)
-        }
+        guard !cloudIDs.isEmpty else { return }
+        let cloudToLocal = await PhotoLibraryLinker.localIdentifiers(forCloudIdentifiers: cloudIDs)
 
         // Synchronous mutate + save burst — guard immediately before it (no `await` inside) so a scan
         // that started during the awaits above can't interleave a conflicting save.
@@ -70,7 +69,6 @@ enum SyncMaintenance {
             }
         }
         if remapped > 0 { try? context.save() }
-        UserDefaults.standard.set(true, forKey: didRemapKey)
     }
 
     // MARK: - 2. Cloud-identifier backfill

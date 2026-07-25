@@ -4,6 +4,7 @@ import SwiftUI
 struct AppRootView: View {
     @Environment(\.modelContext) private var modelContext
     @State private var showSplash = true
+    @State private var sync = CloudSyncStatus.shared
 
     var body: some View {
         ZStack {
@@ -14,6 +15,14 @@ struct AppRootView: View {
                     .zIndex(1)
             }
         }
+        .overlay(alignment: .top) {
+            if sync.isImporting && !showSplash {
+                SyncingBanner()
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .zIndex(2)
+            }
+        }
+        .animation(.easeInOut(duration: 0.3), value: sync.isImporting)
         .task {
             // Snappy fade-in, then a comfortable hold before dismissing.
             try? await Task.sleep(nanoseconds: 2_600_000_000)
@@ -24,6 +33,28 @@ struct AppRootView: View {
             // backfill cover thumbnails. Bounded and self-quiescing, so it's cheap on later launches.
             await SyncMaintenance.run(context: modelContext)
         }
+        .onChange(of: sync.lastImportDate) {
+            // Data just arrived from iCloud (e.g. a fresh device pulling the journal down) — re-link
+            // its photos now that they exist locally.
+            Task { await SyncMaintenance.run(context: modelContext) }
+        }
+    }
+}
+
+/// A slim "Syncing with iCloud…" banner shown while a CloudKit import (restore/download) is running.
+private struct SyncingBanner: View {
+    var body: some View {
+        HStack(spacing: 8) {
+            ProgressView().controlSize(.small)
+            Text("Syncing with iCloud…")
+                .font(.footnote.weight(.medium))
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(.thinMaterial, in: Capsule())
+        .overlay(Capsule().strokeBorder(.secondary.opacity(0.15)))
+        .shadow(color: .black.opacity(0.1), radius: 6, y: 2)
+        .padding(.top, 8)
     }
 }
 
