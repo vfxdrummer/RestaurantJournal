@@ -5,12 +5,21 @@ import SwiftUI
 struct AppSettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var analyticsEnabled = Analytics.isEnabled
+    @State private var sync = CloudSyncStatus.shared
 
     private let privacyURL = URL(string: "https://restaurant-journal.com/privacy")!
 
     var body: some View {
         NavigationStack {
             Form {
+                Section {
+                    syncRow
+                } header: {
+                    Text("iCloud Backup")
+                } footer: {
+                    Text("Your journal is stored privately in your own iCloud — restaurants, ratings, notes and voice memos. It restores automatically when you reinstall the app or set up a new iPhone. Nothing is shared with us or anyone else.")
+                }
+
                 Section {
                     Toggle("Share anonymous usage data", isOn: $analyticsEnabled)
                         .onChange(of: analyticsEnabled) { _, newValue in
@@ -37,6 +46,77 @@ struct AppSettingsView: View {
                     Button("Done") { dismiss() }
                 }
             }
+            .task { await sync.refresh() }
+        }
+    }
+
+    // MARK: - iCloud sync status row
+
+    @ViewBuilder
+    private var syncRow: some View {
+        HStack(spacing: 12) {
+            Image(systemName: syncIcon)
+                .font(.title3)
+                .foregroundStyle(syncTint)
+                .frame(width: 28)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(syncTitle)
+                if let subtitle = syncSubtitle {
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+            if sync.isSyncing {
+                ProgressView()
+            }
+        }
+    }
+
+    private var syncTitle: String {
+        switch sync.account {
+        case .checking: return "Checking iCloud…"
+        case .available: return sync.lastErrorMessage == nil ? "Backing up to iCloud" : "Backup issue"
+        case .noAccount: return "Not signed in to iCloud"
+        case .restricted: return "iCloud is restricted"
+        case .unavailable: return "iCloud unavailable"
+        }
+    }
+
+    private var syncSubtitle: String? {
+        switch sync.account {
+        case .checking:
+            return nil
+        case .available:
+            if let message = sync.lastErrorMessage { return "\(message) — will retry automatically." }
+            if let date = sync.lastSyncDate {
+                return "Last backed up \(date.formatted(.relative(presentation: .named)))."
+            }
+            return "Your journal syncs automatically."
+        case .noAccount:
+            return "Sign in to iCloud in the Settings app to back up and restore your journal."
+        case .restricted:
+            return "iCloud access is restricted on this device, so backup is off."
+        case .unavailable:
+            return "Backup will resume automatically once iCloud is reachable."
+        }
+    }
+
+    private var syncIcon: String {
+        switch sync.account {
+        case .checking: return "arrow.triangle.2.circlepath.icloud"
+        case .available: return sync.lastErrorMessage == nil ? "checkmark.icloud" : "exclamationmark.icloud"
+        case .noAccount, .unavailable: return "icloud.slash"
+        case .restricted: return "lock.icloud"
+        }
+    }
+
+    private var syncTint: Color {
+        switch sync.account {
+        case .available where sync.lastErrorMessage == nil: return .green
+        case .checking: return .secondary
+        default: return .orange
         }
     }
 
