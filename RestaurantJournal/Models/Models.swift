@@ -81,7 +81,9 @@ final class Visit {
     /// A small (~300px) JPEG of the cover photo, synced via CloudKit so the journal still renders on
     /// a device that doesn't have the original photos (e.g. a new phone without iCloud Photos).
     /// Generated lazily; nil until produced.
-    @Attribute(.externalStorage) var coverThumbnailData: Data?
+    // No `.externalStorage`: it's incompatible with CloudKit (which stores large blobs as CKAssets
+    // itself) and triggers loadIssueModelContainer. Data lives inline / as a CloudKit asset instead.
+    var coverThumbnailData: Data?
     /// When set, this visit is in "Recently Deleted": hidden everywhere but fully recoverable, and
     /// permanently purged after a grace period. `nil` means the visit is live.
     var deletedAt: Date?
@@ -232,7 +234,9 @@ final class EstablishmentLogo {
     // handled in EstablishmentLogoStore.
     var host: String = ""
     /// The icon bytes, stored outside the main store on disk when large enough.
-    @Attribute(.externalStorage) var imageData: Data?
+    // No `.externalStorage`: it's incompatible with CloudKit (which stores large blobs as CKAssets
+    // itself) and triggers loadIssueModelContainer. Data lives inline / as a CloudKit asset instead.
+    var imageData: Data?
     /// The URL the icon was resolved from — lets us refresh from the same source later.
     var resolvedIconURLString: String?
     var isMissing: Bool = false
@@ -256,7 +260,9 @@ final class EstablishmentLogo {
 @Model
 final class Person {
     /// A representative face crop for the icon.
-    @Attribute(.externalStorage) var representativeFaceData: Data?
+    // No `.externalStorage`: it's incompatible with CloudKit (which stores large blobs as CKAssets
+    // itself) and triggers loadIssueModelContainer. Data lives inline / as a CloudKit asset instead.
+    var representativeFaceData: Data?
     /// Archived Vision feature print of the representative face, used to cluster new faces.
     var representativeFeaturePrintData: Data?
     // Default required for CloudKit sync (see Restaurant); init always sets the real value.
@@ -295,7 +301,9 @@ final class Person {
 final class DetectedFace {
     // Default required for CloudKit sync (see Restaurant); init always sets the real value.
     var photoLocalIdentifier: String = ""
-    @Attribute(.externalStorage) var faceCropData: Data?
+    // No `.externalStorage`: it's incompatible with CloudKit (which stores large blobs as CKAssets
+    // itself) and triggers loadIssueModelContainer. Data lives inline / as a CloudKit asset instead.
+    var faceCropData: Data?
     var person: Person?
     var visit: Visit?
 
