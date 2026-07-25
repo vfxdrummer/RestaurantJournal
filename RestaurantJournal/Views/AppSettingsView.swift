@@ -6,6 +6,7 @@ struct AppSettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var analyticsEnabled = Analytics.isEnabled
     @State private var sync = CloudSyncStatus.shared
+    @AppStorage(SyncPreference.key) private var syncEnabled = true
 
     private let privacyURL = URL(string: "https://restaurant-journal.com/privacy")!
 
@@ -13,11 +14,14 @@ struct AppSettingsView: View {
         NavigationStack {
             Form {
                 Section {
-                    syncRow
+                    Toggle("Back up to iCloud", isOn: $syncEnabled)
+                    if syncEnabled {
+                        syncRow
+                    }
                 } header: {
                     Text("iCloud Backup")
                 } footer: {
-                    Text("Your journal is stored privately in your own iCloud — restaurants, ratings, notes and voice memos. It restores automatically when you reinstall the app or set up a new iPhone. Nothing is shared with us or anyone else.")
+                    Text(syncFooter)
                 }
 
                 Section {
@@ -71,6 +75,14 @@ struct AppSettingsView: View {
             if sync.isSyncing {
                 ProgressView()
             }
+        }
+    }
+
+    private var syncFooter: String {
+        if syncEnabled {
+            return "Your journal is stored privately in your own iCloud — restaurants, ratings, notes and voice memos. It restores automatically when you reinstall the app or set up a new iPhone. Nothing is shared with us or anyone else. Reopen the app after changing this for it to take effect."
+        } else {
+            return "Backup is off — your journal stays only on this iPhone and won't restore if you delete the app or switch phones. Reopen the app after turning this on to start backing up."
         }
     }
 

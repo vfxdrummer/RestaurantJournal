@@ -36,16 +36,18 @@ struct RestaurantJournalApp: App {
         // On-device-only caches. Distinct store name so it lives in its own file.
         let local = ModelConfiguration("Local", schema: localSchema, cloudKitDatabase: .none)
 
-        // Preferred: journal synced to the user's private iCloud.
-        let cloudJournal = ModelConfiguration(
-            "Journal", schema: journalSchema,
-            cloudKitDatabase: .private(cloudKitContainerID)
-        )
-        if let container = try? ModelContainer(for: fullSchema, configurations: cloudJournal, local) {
-            return container
+        // Preferred: journal synced to the user's private iCloud (unless the user turned it off).
+        if SyncPreference.isEnabled {
+            let cloudJournal = ModelConfiguration(
+                "Journal", schema: journalSchema,
+                cloudKitDatabase: .private(cloudKitContainerID)
+            )
+            if let container = try? ModelContainer(for: fullSchema, configurations: cloudJournal, local) {
+                return container
+            }
         }
 
-        // Fallback: local-only journal (capability not provisioned yet). Never blocks launch.
+        // Fallback: local-only journal (sync off, or capability not provisioned). Never blocks launch.
         let localJournal = ModelConfiguration("Journal", schema: journalSchema, cloudKitDatabase: .none)
         if let container = try? ModelContainer(for: fullSchema, configurations: localJournal, local) {
             return container
