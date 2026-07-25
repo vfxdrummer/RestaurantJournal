@@ -29,8 +29,6 @@ struct AppRootView: View {
             withAnimation(.easeInOut(duration: 0.55)) { showSplash = false }
         }
         .task {
-            // Enable the on-disk place-lookup cache (survives relaunches).
-            GeoLookupCoordinator.shared.context = modelContext
             // One-time: migrate a pre-sync install's local journal into the synced store (no-op after,
             // and when there's nothing to migrate).
             LegacyStoreMigration.migrateIfNeeded(into: modelContext)

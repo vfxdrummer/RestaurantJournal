@@ -3,8 +3,8 @@ import SwiftData
 
 /// Resolves a `RestaurantCandidate` to a persisted `Restaurant`, deduping by name + rough
 /// coordinates so repeat visits to the same place link to one record. Shared by the scanner and
-/// the manual "correct the place" flow.
-@MainActor
+/// the manual "correct the place" flow. Not actor-isolated — it only touches the passed context, so
+/// it runs on whatever context/actor calls it (the background scan engine, or the main context).
 enum RestaurantResolver {
 
     /// Two restaurants within this lat/lon delta (~50m) with the same name are treated as one.

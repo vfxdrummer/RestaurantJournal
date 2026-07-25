@@ -7,23 +7,32 @@ import SwiftData
 enum DataResetService {
 
     static func resetAll(in context: ModelContext) {
-        // Batch-delete every model. Deleting each type explicitly (rather than relying on cascade
-        // rules) guarantees a clean slate even for records with no parent relationship.
-        try? context.delete(model: Visit.self)
-        try? context.delete(model: Restaurant.self)
-        try? context.delete(model: PhotoAsset.self)
-        try? context.delete(model: VoiceNote.self)
+        // Synced (Journal) models: delete object-by-object so the deletions are change-tracked and
+        // propagate to CloudKit. A `delete(model:)` batch delete bypasses tracking, so CloudKit never
+        // sees it and re-imports the records — the "it just resyncs" bug.
+        deleteEach(Visit.self, in: context)
+        deleteEach(Restaurant.self, in: context)
+        deleteEach(PhotoAsset.self, in: context)
+        deleteEach(VoiceNote.self, in: context)
+        deleteEach(Person.self, in: context)
+        deleteEach(DetectedFace.self, in: context)
+
+        // Local-only caches: a batch delete is fine (they don't sync).
         try? context.delete(model: ScreenedPhoto.self)
         try? context.delete(model: EstablishmentLogo.self)
-        try? context.delete(model: Person.self)
-        try? context.delete(model: DetectedFace.self)
         try? context.delete(model: FaceScannedPhoto.self)
         try? context.delete(model: CachedPlaceLookup.self)
         try? context.save()
 
         removeVoiceFiles()
         EstablishmentLogoStore.clearMemoryCache()
-        GeoLookupCoordinator.shared.clearCache()
+    }
+
+    /// Delete every instance of a model through the context so the deletes are tracked (and, for the
+    /// synced store, mirrored to CloudKit).
+    private static func deleteEach<T: PersistentModel>(_ type: T.Type, in context: ModelContext) {
+        guard let objects = try? context.fetch(FetchDescriptor<T>()) else { return }
+        for object in objects { context.delete(object) }
     }
 
     /// Remove the recorded `voice_*.m4a` files from the Documents directory.

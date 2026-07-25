@@ -45,13 +45,20 @@ enum SyncMaintenance {
     private static func remapRestoredPhotos(context: ModelContext) async {
         guard !VisitDiscoveryService.isScanning else { return }
 
-        guard let photos = try? context.fetch(FetchDescriptor<PhotoAsset>()), !photos.isEmpty else { return }
+        guard let photos = try? context.fetch(FetchDescriptor<PhotoAsset>()), !photos.isEmpty else {
+            print("[sync] remap: no photos")
+            return
+        }
         let allLocalIDs = photos.map(\.localIdentifier).filter { !$0.isEmpty }
 
         // Which of our stored local identifiers are missing on *this* device?
         let present = await PhotoLibraryLinker.existingLocalIdentifiers(from: allLocalIDs)
         let stale = photos.filter { !$0.localIdentifier.isEmpty && !present.contains($0.localIdentifier) }
+        let withCloudID = stale.filter { $0.photoCloudIdentifier != nil }.count
+        print("[sync] remap: \(photos.count) photos · \(stale.count) not on this device · \(withCloudID) of those have cloud-ids")
         guard !stale.isEmpty else { return }
+        var remappedTotal = 0
+        defer { print("[sync] remap: re-linked \(remappedTotal) photos") }
 
         // Re-link most-recent photos first — that's what the user sees at the top of the journal —
         // and commit each batch so those tiles resolve before the older ones finish.
@@ -75,6 +82,7 @@ enum SyncMaintenance {
                 }
             }
             if remapped > 0 { try? context.save() }
+            remappedTotal += remapped
         }
     }
 
@@ -91,7 +99,13 @@ enum SyncMaintenance {
             predicate: #Predicate { $0.photoCloudIdentifier == nil },
             sortBy: [SortDescriptor(\.takenAt, order: .reverse)]
         )
-        guard let photos = try? context.fetch(descriptor), !photos.isEmpty else { return }
+        guard let photos = try? context.fetch(descriptor), !photos.isEmpty else {
+            print("[sync] backfill: nothing missing a cloud-id")
+            return
+        }
+        print("[sync] backfill: \(photos.count) photos missing a cloud-id")
+        var updatedTotal = 0
+        defer { print("[sync] backfill: captured \(updatedTotal) cloud-ids") }
 
         let batchSize = 300
         for start in stride(from: 0, to: photos.count, by: batchSize) {
@@ -111,6 +125,7 @@ enum SyncMaintenance {
                 }
             }
             if updated > 0 { try? context.save() }
+            updatedTotal += updated
         }
     }
 }
