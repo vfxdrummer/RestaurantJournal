@@ -1,7 +1,7 @@
 import Foundation
 import MapKit
 
-struct RestaurantCandidate {
+struct RestaurantCandidate: Sendable {
     let name: String
     let coordinate: CLLocationCoordinate2D
     let address: String?
@@ -13,29 +13,94 @@ struct RestaurantCandidate {
     let country: String?
 }
 
+/// Serializes MapKit spatial lookups so a scan stays under Apple's ~50-requests/60s throttle, and
+/// caches results by ~110m location bucket so the many clusters at one restaurant reuse a single
+/// request.
+actor GeoLookupCoordinator {
+    static let shared = GeoLookupCoordinator()
+
+    private var cache: [String: [RestaurantCandidate]] = [:]
+    private var timestamps: [Date] = []
+    private let maxRequests = 45           // safely under Apple's 50
+    private let window: TimeInterval = 60
+
+    func cached(_ key: String) -> [RestaurantCandidate]? { cache[key] }
+    func store(_ key: String, _ value: [RestaurantCandidate]) { cache[key] = value }
+
+    /// Block until another spatial request can be made without exceeding the rolling window.
+    func reserveSlot() async {
+        while true {
+            let now = Date()
+            timestamps.removeAll { now.timeIntervalSince($0) >= window }
+            if timestamps.count < maxRequests {
+                timestamps.append(now)
+                return
+            }
+            if let oldest = timestamps.first {
+                let wait = window - now.timeIntervalSince(oldest) + 0.1
+                try? await Task.sleep(nanoseconds: UInt64(max(wait, 0.1) * 1_000_000_000))
+            } else {
+                timestamps.append(now)
+                return
+            }
+        }
+    }
+}
+
 enum RestaurantLookupService {
-    /// Search food-related POIs near a coordinate; return best candidate + alternatives.
+    /// Search food-related POIs near a coordinate; return best candidate + alternatives. Cached by
+    /// location, rate-limited, and retried on throttling so a big scan never silently drops matches.
     static func lookup(near coordinate: CLLocationCoordinate2D) async -> [RestaurantCandidate] {
-        let request = MKLocalPointsOfInterestRequest(
-            center: coordinate,
-            radius: 100
-        )
+        let key = cacheKey(for: coordinate)
+        if let cached = await GeoLookupCoordinator.shared.cached(key) {
+            return cached
+        }
+
+        let request = MKLocalPointsOfInterestRequest(center: coordinate, radius: 100)
         request.pointOfInterestFilter = MKPointOfInterestFilter(including: [
             .restaurant, .cafe, .bakery, .brewery, .winery, .foodMarket
         ])
-
-        let search = MKLocalSearch(request: request)
-        guard let response = try? await search.start() else { return [] }
-
         let origin = CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
 
-        let sorted = response.mapItems.sorted { a, b in
-            let aLoc = a.placemark.location ?? origin
-            let bLoc = b.placemark.location ?? origin
-            return origin.distance(from: aLoc) < origin.distance(from: bLoc)
+        for attempt in 0..<3 {
+            await GeoLookupCoordinator.shared.reserveSlot()
+            do {
+                let response = try await MKLocalSearch(request: request).start()
+                let sorted = response.mapItems.sorted { a, b in
+                    let aLoc = a.placemark.location ?? origin
+                    let bLoc = b.placemark.location ?? origin
+                    return origin.distance(from: aLoc) < origin.distance(from: bLoc)
+                }
+                let candidates = sorted.map(candidate(from:))
+                await GeoLookupCoordinator.shared.store(key, candidates)
+                return candidates
+            } catch {
+                // On a throttle error, wait for the window to reset and retry rather than dropping
+                // the match; on any other error (or once out of retries), give up quietly.
+                if let reset = throttleResetSeconds(from: error), attempt < 2 {
+                    try? await Task.sleep(nanoseconds: UInt64((reset + 0.5) * 1_000_000_000))
+                    continue
+                }
+                return []
+            }
         }
+        return []
+    }
 
-        return sorted.map(candidate(from:))
+    /// ~110m buckets (3 decimal places) so clusters at the same place share one lookup.
+    private static func cacheKey(for c: CLLocationCoordinate2D) -> String {
+        String(format: "%.3f,%.3f", c.latitude, c.longitude)
+    }
+
+    /// Seconds until MapKit's throttle window resets, if `error` is a throttle; nil otherwise.
+    private static func throttleResetSeconds(from error: Error) -> Double? {
+        let ns = error as NSError
+        guard ns.domain == "GEOErrorDomain" else { return nil }
+        if let t = ns.userInfo["timeUntilReset"] as? Double { return t }
+        if let t = ns.userInfo["timeUntilReset"] as? Int { return Double(t) }
+        if let details = ns.userInfo["details"] as? [[String: Any]],
+           let t = details.first?["timeUntilReset"] as? Double { return t }
+        return 20   // sensible default within the 60s window
     }
 
     /// Build a `RestaurantCandidate` from a map item — shared by the nearby search and the
