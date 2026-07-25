@@ -243,6 +243,7 @@ struct EditPlaceView: View {
             visit.restaurant = newRestaurant
         }
         try? modelContext.save()
+        print("[sync] place changed → \(newRestaurant.name)\(applyToAll ? " (applied to all siblings)" : "") — saved, will export")
         dismiss()
     }
 
