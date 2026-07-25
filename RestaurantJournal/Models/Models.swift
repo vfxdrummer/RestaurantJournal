@@ -24,9 +24,11 @@ enum VisitRating: String, CaseIterable, Identifiable {
 
 @Model
 final class Restaurant {
-    var name: String
-    var latitude: Double
-    var longitude: Double
+    // Non-optional attributes carry defaults because this model syncs via CloudKit, which requires
+    // every stored property to be optional or have a default. Initializers always overwrite them.
+    var name: String = ""
+    var latitude: Double = 0
+    var longitude: Double = 0
     var address: String?
     var mapItemIdentifier: String?
     /// Website host (e.g. "rosas-taqueria.com") used to fetch the establishment's icon/logo.
@@ -65,7 +67,8 @@ final class Restaurant {
 
 @Model
 final class Visit {
-    var date: Date
+    // Default required for CloudKit sync (see Restaurant); init always sets the real date.
+    var date: Date = Date()
     var restaurant: Restaurant?
     var userNote: String?
     var occasion: String?
@@ -75,6 +78,10 @@ final class Visit {
     var longitude: Double?
     /// The user-chosen cover photo (by PHAsset local identifier). Falls back to the first photo.
     var coverPhotoLocalIdentifier: String?
+    /// A small (~300px) JPEG of the cover photo, synced via CloudKit so the journal still renders on
+    /// a device that doesn't have the original photos (e.g. a new phone without iCloud Photos).
+    /// Generated lazily; nil until produced.
+    @Attribute(.externalStorage) var coverThumbnailData: Data?
     /// When set, this visit is in "Recently Deleted": hidden everywhere but fully recoverable, and
     /// permanently purged after a grace period. `nil` means the visit is live.
     var deletedAt: Date?
@@ -146,8 +153,13 @@ final class Visit {
 
 @Model
 final class PhotoAsset {
-    var localIdentifier: String
-    var takenAt: Date
+    // Defaults required for CloudKit sync (see Restaurant); init always sets real values.
+    var localIdentifier: String = ""
+    var takenAt: Date = Date()
+    /// The photo's `PHCloudIdentifier`, captured so the asset can be re-linked to the same photo on
+    /// a *different* device that shares the user's iCloud Photo Library (local identifiers differ
+    /// across devices; cloud identifiers are stable). Nil until captured / for non-iCloud photos.
+    var photoCloudIdentifier: String?
     var latitude: Double?
     var longitude: Double?
     var isVideo: Bool = false
@@ -164,9 +176,10 @@ final class PhotoAsset {
 
 @Model
 final class VoiceNote {
-    var audioFilename: String  // relative to Documents dir
+    // Defaults required for CloudKit sync (see Restaurant); init always sets real values.
+    var audioFilename: String = ""  // relative to Documents dir
     var transcript: String?
-    var recordedAt: Date
+    var recordedAt: Date = Date()
     var visit: Visit?
 
     init(audioFilename: String, recordedAt: Date, transcript: String? = nil) {
@@ -240,7 +253,8 @@ final class Person {
     @Attribute(.externalStorage) var representativeFaceData: Data?
     /// Archived Vision feature print of the representative face, used to cluster new faces.
     var representativeFeaturePrintData: Data?
-    var createdAt: Date
+    // Default required for CloudKit sync (see Restaurant); init always sets the real value.
+    var createdAt: Date = Date()
 
     @Relationship(deleteRule: .cascade, inverse: \DetectedFace.person)
     var faces: [DetectedFace] = []
@@ -273,7 +287,8 @@ final class Person {
 /// A single face found in one photo, linked to the clustered `Person` and the `Visit` it belongs to.
 @Model
 final class DetectedFace {
-    var photoLocalIdentifier: String
+    // Default required for CloudKit sync (see Restaurant); init always sets the real value.
+    var photoLocalIdentifier: String = ""
     @Attribute(.externalStorage) var faceCropData: Data?
     var person: Person?
     var visit: Visit?
