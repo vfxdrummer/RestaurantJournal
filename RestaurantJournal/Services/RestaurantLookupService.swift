@@ -15,14 +15,19 @@ struct RestaurantCandidate: Sendable {
 
 /// Serializes MapKit spatial lookups so a scan stays under Apple's ~50-requests/60s throttle, and
 /// caches results by ~110m location bucket so the many clusters at one restaurant reuse a single
-/// request.
-actor GeoLookupCoordinator {
+/// request. Observable so the UI can show when matching is paused waiting on the throttle.
+@MainActor
+@Observable
+final class GeoLookupCoordinator {
     static let shared = GeoLookupCoordinator()
 
-    private var cache: [String: [RestaurantCandidate]] = [:]
-    private var timestamps: [Date] = []
-    private let maxRequests = 45           // safely under Apple's 50
-    private let window: TimeInterval = 60
+    /// True while place matching is paused waiting for MapKit's rate-limit window to free up.
+    private(set) var isThrottled = false
+
+    @ObservationIgnored private var cache: [String: [RestaurantCandidate]] = [:]
+    @ObservationIgnored private var timestamps: [Date] = []
+    @ObservationIgnored private let maxRequests = 45           // safely under Apple's 50
+    @ObservationIgnored private let window: TimeInterval = 60
 
     func cached(_ key: String) -> [RestaurantCandidate]? { cache[key] }
     func store(_ key: String, _ value: [RestaurantCandidate]) { cache[key] = value }
@@ -34,12 +39,15 @@ actor GeoLookupCoordinator {
             timestamps.removeAll { now.timeIntervalSince($0) >= window }
             if timestamps.count < maxRequests {
                 timestamps.append(now)
+                isThrottled = false
                 return
             }
             if let oldest = timestamps.first {
+                isThrottled = true
                 let wait = window - now.timeIntervalSince(oldest) + 0.1
                 try? await Task.sleep(nanoseconds: UInt64(max(wait, 0.1) * 1_000_000_000))
             } else {
+                isThrottled = false
                 timestamps.append(now)
                 return
             }

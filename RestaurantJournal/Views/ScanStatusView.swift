@@ -1,6 +1,7 @@
 import SwiftUI
 
 /// Scan trigger + live progress with pause/resume, driven by an observable `VisitDiscoveryService`.
+/// Screening photos and matching places run concurrently, so each gets its own progress bar.
 struct ScanStatusView: View {
     let scanner: VisitDiscoveryService
     /// Whether the scan can be cancelled. The first-run onboarding scan must complete in full, so
@@ -9,18 +10,16 @@ struct ScanStatusView: View {
     /// `true` = full rescan (ignore the incremental window, re-check the whole library).
     let onScan: (Bool) -> Void
 
+    /// Observed so the throttle message appears/disappears live.
+    @State private var geo = GeoLookupCoordinator.shared
+
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 10) {
             switch scanner.phase {
             case .scanning, .paused:
-                HStack(alignment: .firstTextBaseline) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(scanner.phase == .paused ? "Paused" : scanner.stageDescription)
-                            .font(.subheadline).bold()
-                        Text("\(scanner.processed) of \(scanner.total) · \(scanner.newVisitCount) found")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+                HStack {
+                    Text(scanner.phase == .paused ? "Paused" : "Scanning your library")
+                        .font(.subheadline).bold()
                     Spacer()
                     Button {
                         if scanner.phase == .paused { scanner.resume() } else { scanner.pause() }
@@ -36,14 +35,33 @@ struct ScanStatusView: View {
                         Button(role: .destructive) {
                             scanner.cancel()
                         } label: {
-                            Label("Cancel", systemImage: "xmark")
-                                .labelStyle(.iconOnly)
+                            Label("Cancel", systemImage: "xmark").labelStyle(.iconOnly)
                         }
                         .buttonStyle(.bordered)
                         .tint(.red)
                     }
                 }
-                ProgressView(value: scanner.progress)
+
+                // Stage 1 — screening photos (CPU-bound, fast).
+                progressRow(
+                    title: "Scanning photos",
+                    detail: "\(scanner.processed) of \(scanner.total)",
+                    value: scanner.progress
+                )
+
+                // Stage 2 — matching places (runs at the same time, paced by MapKit's limit).
+                progressRow(
+                    title: "Matching places",
+                    detail: "\(scanner.newVisitCount) found",
+                    value: scanner.matchProgress
+                )
+
+                if geo.isThrottled {
+                    Text("Matching throttled by Apple (max 50 per minute)")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
 
             case .idle, .finished:
                 Button {
@@ -68,5 +86,19 @@ struct ScanStatusView: View {
             }
         }
         .padding()
+    }
+
+    @ViewBuilder
+    private func progressRow(title: String, detail: String, value: Double) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack {
+                Text(title)
+                Spacer()
+                Text(detail)
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            ProgressView(value: value)
+        }
     }
 }
