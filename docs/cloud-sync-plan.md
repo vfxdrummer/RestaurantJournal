@@ -5,6 +5,11 @@ new device* — with no account and no login. Uses the user's own private iCloud
 SwiftData, so nothing lands on a server we operate and the "no account, nothing leaves your phone to
 a third party" brand promise stays intact.
 
+> **Status (branch `icloud-sync`):** Phases 1, 2, 3, 5 implemented and building against the iOS 26.2
+> SDK. Phase 4 (faces on-device) intentionally deferred with the People feature. **Remaining manual
+> step:** add the iCloud → CloudKit capability in Xcode (Signing & Capabilities) so the container
+> `iCloud.com.vfxdrummer.RestaurantJournal` is provisioned; until then the app runs local-only.
+
 ## Decisions baked into this plan (override any before we start)
 1. **Cover thumbnails are synced.** A small (~300px) JPEG per visit rides in the user's iCloud so the
    journal renders even on a device that doesn't have the original photos. *(Recommended: yes — it's
