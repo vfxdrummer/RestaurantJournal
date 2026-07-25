@@ -24,9 +24,11 @@ enum VisitRating: String, CaseIterable, Identifiable {
 
 @Model
 final class Restaurant {
-    var name: String
-    var latitude: Double
-    var longitude: Double
+    // Non-optional attributes carry defaults because this model syncs via CloudKit, which requires
+    // every stored property to be optional or have a default. Initializers always overwrite them.
+    var name: String = ""
+    var latitude: Double = 0
+    var longitude: Double = 0
     var address: String?
     var mapItemIdentifier: String?
     /// Website host (e.g. "rosas-taqueria.com") used to fetch the establishment's icon/logo.
@@ -42,8 +44,14 @@ final class Restaurant {
     /// keeps generating false positives). Set via "Stop detecting this place".
     var isIgnored: Bool = false
 
+    // CloudKit requires to-many relationships to be OPTIONAL. Store it optional and expose a
+    // non-optional `visits` computed accessor so existing call sites are unchanged.
     @Relationship(deleteRule: .cascade, inverse: \Visit.restaurant)
-    var visits: [Visit] = []
+    var visitsStorage: [Visit]?
+    var visits: [Visit] {
+        get { visitsStorage ?? [] }
+        set { visitsStorage = newValue }
+    }
 
     init(name: String, latitude: Double, longitude: Double, address: String? = nil, mapItemIdentifier: String? = nil, websiteHost: String? = nil, categoryRawValue: String? = nil, city: String? = nil, region: String? = nil, country: String? = nil) {
         self.name = name
@@ -65,7 +73,8 @@ final class Restaurant {
 
 @Model
 final class Visit {
-    var date: Date
+    // Default required for CloudKit sync (see Restaurant); init always sets the real date.
+    var date: Date = Date()
     var restaurant: Restaurant?
     var userNote: String?
     var occasion: String?
@@ -75,6 +84,12 @@ final class Visit {
     var longitude: Double?
     /// The user-chosen cover photo (by PHAsset local identifier). Falls back to the first photo.
     var coverPhotoLocalIdentifier: String?
+    /// A small (~300px) JPEG of the cover photo, synced via CloudKit so the journal still renders on
+    /// a device that doesn't have the original photos (e.g. a new phone without iCloud Photos).
+    /// Generated lazily; nil until produced.
+    // No `.externalStorage`: it's incompatible with CloudKit (which stores large blobs as CKAssets
+    // itself) and triggers loadIssueModelContainer. Data lives inline / as a CloudKit asset instead.
+    var coverThumbnailData: Data?
     /// When set, this visit is in "Recently Deleted": hidden everywhere but fully recoverable, and
     /// permanently purged after a grace period. `nil` means the visit is live.
     var deletedAt: Date?
@@ -97,14 +112,28 @@ final class Visit {
     /// A visit sourced only from a card charge (no photos backing it).
     var isCardOnly: Bool { cardTransactionID != nil && photos.isEmpty }
 
+    // CloudKit requires to-many relationships to be OPTIONAL; non-optional computed accessors keep
+    // call sites unchanged.
     @Relationship(deleteRule: .cascade, inverse: \PhotoAsset.visit)
-    var photos: [PhotoAsset] = []
+    var photosStorage: [PhotoAsset]?
+    var photos: [PhotoAsset] {
+        get { photosStorage ?? [] }
+        set { photosStorage = newValue }
+    }
 
     @Relationship(deleteRule: .cascade, inverse: \VoiceNote.visit)
-    var voiceNotes: [VoiceNote] = []
+    var voiceNotesStorage: [VoiceNote]?
+    var voiceNotes: [VoiceNote] {
+        get { voiceNotesStorage ?? [] }
+        set { voiceNotesStorage = newValue }
+    }
 
     @Relationship(deleteRule: .cascade, inverse: \DetectedFace.visit)
-    var detectedFaces: [DetectedFace] = []
+    var detectedFacesStorage: [DetectedFace]?
+    var detectedFaces: [DetectedFace] {
+        get { detectedFacesStorage ?? [] }
+        set { detectedFacesStorage = newValue }
+    }
 
     init(date: Date, restaurant: Restaurant? = nil, latitude: Double? = nil, longitude: Double? = nil) {
         self.date = date
@@ -146,8 +175,13 @@ final class Visit {
 
 @Model
 final class PhotoAsset {
-    var localIdentifier: String
-    var takenAt: Date
+    // Defaults required for CloudKit sync (see Restaurant); init always sets real values.
+    var localIdentifier: String = ""
+    var takenAt: Date = Date()
+    /// The photo's `PHCloudIdentifier`, captured so the asset can be re-linked to the same photo on
+    /// a *different* device that shares the user's iCloud Photo Library (local identifiers differ
+    /// across devices; cloud identifiers are stable). Nil until captured / for non-iCloud photos.
+    var photoCloudIdentifier: String?
     var latitude: Double?
     var longitude: Double?
     var isVideo: Bool = false
@@ -164,9 +198,10 @@ final class PhotoAsset {
 
 @Model
 final class VoiceNote {
-    var audioFilename: String  // relative to Documents dir
+    // Defaults required for CloudKit sync (see Restaurant); init always sets real values.
+    var audioFilename: String = ""  // relative to Documents dir
     var transcript: String?
-    var recordedAt: Date
+    var recordedAt: Date = Date()
     var visit: Visit?
 
     init(audioFilename: String, recordedAt: Date, transcript: String? = nil) {
@@ -186,16 +221,20 @@ final class VoiceNote {
 /// became a Visit). Keyed by the asset's stable `localIdentifier`.
 @Model
 final class ScreenedPhoto {
-    @Attribute(.unique) var localIdentifier: String
-    var isDining: Bool
+    // No `@Attribute(.unique)` and defaults on every stored property: this model shares a
+    // ModelContainer with the CloudKit-synced Journal store, and SwiftData validates the whole
+    // container against CloudKit's rules (no unique constraints; non-optionals need defaults) even
+    // though this store itself is local-only. Dedup is handled in code (loadScreenCache).
+    var localIdentifier: String = ""
+    var isDining: Bool = false
     /// Set when the user deletes a visit — the scanner then skips this photo so the visit isn't
     /// recreated on the next scan.
-    var dismissed: Bool
+    var dismissed: Bool = false
     /// The classifier version that produced `isDining`. When the classifier improves (its version
     /// bumps), a full rescan re-evaluates stale *negatives* — positives are left alone. Defaults to
     /// 0 so any photos screened before versioning are treated as stale.
     var screenerVersion: Int = 0
-    var screenedAt: Date
+    var screenedAt: Date = Date()
 
     init(localIdentifier: String, isDining: Bool, dismissed: Bool = false, screenerVersion: Int = RestaurantPhotoClassifier.version, screenedAt: Date = Date()) {
         self.localIdentifier = localIdentifier
@@ -211,16 +250,20 @@ final class ScreenedPhoto {
 /// negative result (we looked and found nothing) so we don't keep re-hitting logo-less sites.
 @Model
 final class EstablishmentLogo {
-    @Attribute(.unique) var host: String
+    // See ScreenedPhoto: no unique + defaults, for CloudKit container validation. Dedup by host is
+    // handled in EstablishmentLogoStore.
+    var host: String = ""
     /// The icon bytes, stored outside the main store on disk when large enough.
-    @Attribute(.externalStorage) var imageData: Data?
+    // No `.externalStorage`: it's incompatible with CloudKit (which stores large blobs as CKAssets
+    // itself) and triggers loadIssueModelContainer. Data lives inline / as a CloudKit asset instead.
+    var imageData: Data?
     /// The URL the icon was resolved from — lets us refresh from the same source later.
     var resolvedIconURLString: String?
-    var isMissing: Bool
+    var isMissing: Bool = false
     /// Which logo sources were enabled when a negative result was recorded. If this no longer
     /// matches the current sources (e.g. Brandfetch was turned on), the miss is re-evaluated.
     var missSignature: String?
-    var fetchedAt: Date
+    var fetchedAt: Date = Date()
 
     init(host: String, imageData: Data? = nil, resolvedIconURLString: String? = nil, isMissing: Bool = false, missSignature: String? = nil, fetchedAt: Date = Date()) {
         self.host = host
@@ -237,13 +280,21 @@ final class EstablishmentLogo {
 @Model
 final class Person {
     /// A representative face crop for the icon.
-    @Attribute(.externalStorage) var representativeFaceData: Data?
+    // No `.externalStorage`: it's incompatible with CloudKit (which stores large blobs as CKAssets
+    // itself) and triggers loadIssueModelContainer. Data lives inline / as a CloudKit asset instead.
+    var representativeFaceData: Data?
     /// Archived Vision feature print of the representative face, used to cluster new faces.
     var representativeFeaturePrintData: Data?
-    var createdAt: Date
+    // Default required for CloudKit sync (see Restaurant); init always sets the real value.
+    var createdAt: Date = Date()
 
+    // CloudKit requires to-many relationships to be OPTIONAL; computed accessor keeps call sites same.
     @Relationship(deleteRule: .cascade, inverse: \DetectedFace.person)
-    var faces: [DetectedFace] = []
+    var facesStorage: [DetectedFace]?
+    var faces: [DetectedFace] {
+        get { facesStorage ?? [] }
+        set { facesStorage = newValue }
+    }
 
     init(representativeFaceData: Data? = nil, representativeFeaturePrintData: Data? = nil, createdAt: Date = Date()) {
         self.representativeFaceData = representativeFaceData
@@ -273,8 +324,11 @@ final class Person {
 /// A single face found in one photo, linked to the clustered `Person` and the `Visit` it belongs to.
 @Model
 final class DetectedFace {
-    var photoLocalIdentifier: String
-    @Attribute(.externalStorage) var faceCropData: Data?
+    // Default required for CloudKit sync (see Restaurant); init always sets the real value.
+    var photoLocalIdentifier: String = ""
+    // No `.externalStorage`: it's incompatible with CloudKit (which stores large blobs as CKAssets
+    // itself) and triggers loadIssueModelContainer. Data lives inline / as a CloudKit asset instead.
+    var faceCropData: Data?
     var person: Person?
     var visit: Visit?
 
@@ -286,10 +340,30 @@ final class DetectedFace {
     }
 }
 
+/// Persistent cache of a place lookup, keyed by a coarse (~110m) coordinate bucket, so a full
+/// rescan — or a later scan — doesn't re-hit MapKit for locations already resolved. Local-only and
+/// rebuildable; entries older than a TTL are re-fetched. Dedup by `bucketKey` is done in code.
+@Model
+final class CachedPlaceLookup {
+    // No unique + defaults, for CloudKit container validation (this store is local-only).
+    var bucketKey: String = ""
+    /// JSON-encoded `[RestaurantCandidate]` resolved for this bucket.
+    var candidatesData: Data?
+    var cachedAt: Date = Date()
+
+    init(bucketKey: String, candidatesData: Data?, cachedAt: Date = Date()) {
+        self.bucketKey = bucketKey
+        self.candidatesData = candidatesData
+        self.cachedAt = cachedAt
+    }
+}
+
 /// Marks a photo as already scanned for faces, so a rescan skips it (even if it had no faces).
 @Model
 final class FaceScannedPhoto {
-    @Attribute(.unique) var localIdentifier: String
+    // See ScreenedPhoto: no unique + default, for CloudKit container validation. Dedup handled in
+    // FacePeopleService (fetches into a Set).
+    var localIdentifier: String = ""
 
     init(localIdentifier: String) {
         self.localIdentifier = localIdentifier

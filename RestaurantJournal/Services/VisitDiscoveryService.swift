@@ -30,9 +30,25 @@ final class VisitDiscoveryService {
     private(set) var newVisitCount = 0
     private(set) var errorMessage: String?
     private(set) var summary: String?
+    /// Second, concurrent stage: places matched vs. dining clusters found so far. The denominator
+    /// grows as screening discovers more, so this bar is intentionally non-linear.
+    private(set) var matchProcessed = 0
+    private(set) var matchTotal = 0
 
     var progress: Double { total > 0 ? Double(processed) / Double(total) : 0 }
+    var matchProgress: Double { matchTotal > 0 ? Double(matchProcessed) / Double(matchTotal) : 0 }
     var isBusy: Bool { phase == .scanning || phase == .paused }
+
+    // Producer/consumer state for the concurrent scan (not observed). Held on the main actor so the
+    // two scan tasks can share it without Sendable concerns (SwiftData models aren't Sendable).
+    @ObservationIgnored private var diningQueue: [PhotoCluster] = []
+    @ObservationIgnored private var screeningFinished = false
+    @ObservationIgnored private var screenCache: [String: ScreenedPhoto] = [:]
+
+    /// True while *any* scan is running. Read by background maintenance (`SyncMaintenance`) so it
+    /// never mutates the shared model context at the same time as a scan — concurrent saves can throw
+    /// and cut a scan short. Set only inside `scan(in:)`.
+    @MainActor private(set) static var isScanning = false
 
     // MARK: - Pause state (not observed)
 
@@ -82,13 +98,19 @@ final class VisitDiscoveryService {
 
     func scan(in context: ModelContext, fullRescan: Bool = false) async {
         guard !isBusy else { return }
+        Self.isScanning = true
+        defer { Self.isScanning = false }
 
         phase = .scanning
         processed = 0
         total = 0
+        matchProcessed = 0
+        matchTotal = 0
         newVisitCount = 0
         errorMessage = nil
         summary = nil
+        diningQueue = []
+        screeningFinished = false
         isCancelled = false
         isPaused = false
 
@@ -104,6 +126,7 @@ final class VisitDiscoveryService {
         // so it's fast and never re-scans the whole camera roll. A full re-screen of the library
         // only happens when the user explicitly chooses "Rescan all" from the overflow menu.
         let doFull = fullRescan
+        var scannedPhotoCount = 0  // phase 1 count for the summary (`total` is reused by phase 2)
 
         do {
             // Incremental scans look only at photos newer than the last import (fast); a full sweep
@@ -123,105 +146,94 @@ final class VisitDiscoveryService {
                 return
             }
             total = assets.count
+            scannedPhotoCount = assets.count
             let clusters = PhotoClusteringService.cluster(assets)
 
-            var screenCache = try loadScreenCache(in: context)
+            screenCache = try loadScreenCache(in: context)
             let dismissedIds = try loadDismissedIDs(in: context)
             let currentVersion = RestaurantPhotoClassifier.version
 
-            // 5. Per cluster: gate on dining evidence, look up a restaurant, insert a Visit.
-            for cluster in clusters {
-                await waitWhilePaused()
-                if isCancelled { break }
-                let clusterBase = processed
+            // Two concurrent stages that interleave on the main actor, so place-matching happens
+            // *while* screening continues — visits appear right away instead of after the whole
+            // library, and each has its own progress bar:
+            //   • Producer (screening): Vision-screens clusters, queues the dining ones. CPU-bound,
+            //     never waits on MapKit — the photo bar flies through the library.
+            //   • Consumer (matching): resolves a place + creates a visit per queued cluster. This is
+            //     the rate-limited step; throttling paces it without freezing screening.
+            let screening = Task { @MainActor in
+                for cluster in clusters {
+                    await self.waitWhilePaused()
+                    if self.isCancelled { break }
+                    let clusterBase = self.processed
 
-                var diningMatches = 0
-                var looksLikeDining = false
-                for asset in cluster.assets {
-                    if isCancelled { break }
-                    let id = asset.localIdentifier
-                    let isDining: Bool
-                    if dismissedIds.contains(id) {
-                        // The user deleted a visit containing this photo — never resurrect it.
-                        isDining = false
-                    } else if let record = screenCache[id], record.isDining || record.screenerVersion >= currentVersion {
-                        // Trust positives always; trust a negative only if the current classifier
-                        // produced it. A stale negative falls through to be re-screened below.
-                        isDining = record.isDining
-                    } else {
-                        let result = await RestaurantPhotoClassifier.signals(for: asset).isDining
-                        if let record = screenCache[id] {
-                            record.isDining = result
-                            record.screenerVersion = currentVersion
-                            record.screenedAt = Date()
+                    var diningMatches = 0
+                    var looksLikeDining = false
+                    for asset in cluster.assets {
+                        if self.isCancelled { break }
+                        let id = asset.localIdentifier
+                        let isDining: Bool
+                        if dismissedIds.contains(id) {
+                            // The user deleted a visit containing this photo — never resurrect it.
+                            isDining = false
+                        } else if let record = self.screenCache[id], record.isDining || record.screenerVersion >= currentVersion {
+                            // Trust positives always; trust a negative only if the current classifier
+                            // produced it. A stale negative falls through to be re-screened below.
+                            isDining = record.isDining
                         } else {
-                            let record = ScreenedPhoto(localIdentifier: id, isDining: result)
-                            context.insert(record)
-                            screenCache[id] = record
+                            let result = await RestaurantPhotoClassifier.signals(for: asset).isDining
+                            if let record = self.screenCache[id] {
+                                record.isDining = result
+                                record.screenerVersion = currentVersion
+                                record.screenedAt = Date()
+                            } else {
+                                let record = ScreenedPhoto(localIdentifier: id, isDining: result)
+                                context.insert(record)
+                                self.screenCache[id] = record
+                            }
+                            isDining = result
                         }
-                        isDining = result
-                    }
-                    processed += 1
-                    if isDining {
-                        diningMatches += 1
-                        if diningMatches >= Self.minimumDiningPhotosPerCluster {
-                            looksLikeDining = true
-                            break
+                        self.processed += 1
+                        if isDining {
+                            diningMatches += 1
+                            if diningMatches >= Self.minimumDiningPhotosPerCluster {
+                                looksLikeDining = true
+                                break
+                            }
                         }
                     }
+                    // Count photos skipped by the early break so progress still reaches 100%.
+                    self.processed = clusterBase + cluster.assets.count
+                    if self.isCancelled { break }
+                    if looksLikeDining {
+                        self.diningQueue.append(cluster)
+                        self.matchTotal += 1
+                    }
+                    try? context.save()
                 }
-                // Count photos skipped by the early break so progress still reaches 100%.
-                processed = clusterBase + cluster.assets.count
-
-                if isCancelled { break }
-
-                if looksLikeDining {
-                    let candidates = await RestaurantLookupService.lookup(near: cluster.centroid)
-                    if let best = candidates.first {
-                        let restaurant = try RestaurantResolver.findOrCreate(from: best, in: context)
-
-                        // The user marked this place "don't detect" (e.g. it's next to their home).
-                        if restaurant.isIgnored { continue }
-
-                        // If the same meal was split across scans (same place, minutes apart), fold
-                        // the new photos into that recent visit instead of creating a duplicate.
-                        let target: Visit
-                        if let existing = mergeableVisit(for: restaurant, cluster: cluster) {
-                            target = existing
-                        } else {
-                            let visit = Visit(
-                                date: cluster.startDate,
-                                restaurant: restaurant,
-                                latitude: cluster.centroid.latitude,
-                                longitude: cluster.centroid.longitude
-                            )
-                            context.insert(visit)
-                            newVisitCount += 1
-                            target = visit
-                            // Brand-only (chains) — local restaurants bucket as "Independent" so we
-                            // never send specific dining-place names off the device.
-                            Analytics.log("visit_created", [
-                                "brand": LoyaltyDirectory.program(for: restaurant.name)?.brand ?? "Independent"
-                            ])
-                        }
-
-                        for asset in cluster.assets {
-                            let photo = PhotoAsset(
-                                localIdentifier: asset.localIdentifier,
-                                takenAt: asset.creationDate ?? cluster.startDate,
-                                latitude: asset.location?.coordinate.latitude,
-                                longitude: asset.location?.coordinate.longitude,
-                                isVideo: asset.mediaType == .video
-                            )
-                            photo.visit = target
-                            context.insert(photo)
-                        }
-                    }
-                }
-
-                // Persist after each cluster so an interrupted scan resumes cheaply.
-                try? context.save()
+                self.screeningFinished = true
             }
+
+            let matching = Task { @MainActor in
+                var index = 0
+                while !self.isCancelled {
+                    await self.waitWhilePaused()
+                    if index < self.diningQueue.count {
+                        let cluster = self.diningQueue[index]
+                        index += 1
+                        await self.resolvePlace(for: cluster, in: context)
+                        self.matchProcessed += 1
+                        try? context.save()
+                    } else if self.screeningFinished {
+                        break   // no more coming
+                    } else {
+                        try? await Task.sleep(nanoseconds: 80_000_000)   // wait for the producer
+                    }
+                }
+            }
+
+            await screening.value
+            await matching.value
+            screenCache = [:]   // free the cached model references
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -236,12 +248,12 @@ final class VisitDiscoveryService {
                 // so it doesn't repeat until the next improvement.
                 if doFull { lastNegativeRescanVersion = RestaurantPhotoClassifier.version }
                 if summary == nil {
-                    summary = "Scanned \(total) new photo\(total == 1 ? "" : "s") · added \(newVisitCount) visit\(newVisitCount == 1 ? "" : "s")."
+                    summary = "Scanned \(scannedPhotoCount) new photo\(scannedPhotoCount == 1 ? "" : "s") · added \(newVisitCount) visit\(newVisitCount == 1 ? "" : "s")."
                 }
             }
         }
         Analytics.log("scan_completed", [
-            "photos_scanned": total,
+            "photos_scanned": scannedPhotoCount,
             "visits_added": newVisitCount,
             "cancelled": isCancelled,
             "full_rescan": doFull,
@@ -251,6 +263,65 @@ final class VisitDiscoveryService {
     }
 
     // MARK: - Helpers
+
+    /// Resolve a place for one dining cluster and create/attach its visit — the rate-limited
+    /// consumer step of the concurrent scan.
+    private func resolvePlace(for cluster: PhotoCluster, in context: ModelContext) async {
+        let candidates = await RestaurantLookupService.lookup(near: cluster.centroid)
+        guard let best = candidates.first,
+              let restaurant = try? RestaurantResolver.findOrCreate(from: best, in: context)
+        else { return }
+
+        // The user marked this place "don't detect" (e.g. it's next to their home).
+        if restaurant.isIgnored { return }
+
+        // If the same meal was split across scans (same place, minutes apart), fold the new photos
+        // into that recent visit instead of creating a duplicate.
+        let target: Visit
+        if let claimed = visitClaimingAnyPhoto(in: cluster, context: context) {
+            // One of these photos already belongs to a visit — e.g. restored from iCloud and we're
+            // rescanning. Reuse it; never duplicate.
+            target = claimed
+        } else if let existing = mergeableVisit(for: restaurant, cluster: cluster) {
+            target = existing
+        } else {
+            let visit = Visit(
+                date: cluster.startDate,
+                restaurant: restaurant,
+                latitude: cluster.centroid.latitude,
+                longitude: cluster.centroid.longitude
+            )
+            context.insert(visit)
+            newVisitCount += 1
+            target = visit
+            // Brand-only (chains) — local restaurants bucket as "Independent" so we never send
+            // specific dining-place names off the device.
+            Analytics.log("visit_created", [
+                "brand": LoyaltyDirectory.program(for: restaurant.name)?.brand ?? "Independent"
+            ])
+        }
+
+        // Don't re-add photos the target visit already has (dedupe on rescan/restore).
+        let alreadyAttached = Set(target.photos.map(\.localIdentifier))
+        let newAssets = cluster.assets.filter { !alreadyAttached.contains($0.localIdentifier) }
+        // Capture cloud identifiers now so they sync *with* the visit (a second device can otherwise
+        // receive the visit before them and show empty tiles). No-op when iCloud Photos is off.
+        let cloudIDs = await PhotoLibraryLinker.cloudIdentifiers(
+            forLocalIdentifiers: newAssets.map(\.localIdentifier)
+        )
+        for asset in newAssets {
+            let photo = PhotoAsset(
+                localIdentifier: asset.localIdentifier,
+                takenAt: asset.creationDate ?? cluster.startDate,
+                latitude: asset.location?.coordinate.latitude,
+                longitude: asset.location?.coordinate.longitude,
+                isVideo: asset.mediaType == .video
+            )
+            photo.photoCloudIdentifier = cloudIDs[asset.localIdentifier]
+            photo.visit = target
+            context.insert(photo)
+        }
+    }
 
     private func requestPhotoAuth() async -> PHAuthorizationStatus {
         await withCheckedContinuation { continuation in
@@ -302,6 +373,19 @@ final class VisitDiscoveryService {
             )
             return gap <= gapLimit
         }
+    }
+
+    /// The live visit that already owns one of this cluster's photos, if any — so a rescan (e.g.
+    /// after an iCloud restore repopulated visits) reuses it instead of creating a duplicate.
+    private func visitClaimingAnyPhoto(in cluster: PhotoCluster, context: ModelContext) -> Visit? {
+        let ids = cluster.assets.map(\.localIdentifier)
+        guard !ids.isEmpty else { return nil }
+        var descriptor = FetchDescriptor<PhotoAsset>(
+            predicate: #Predicate { ids.contains($0.localIdentifier) }
+        )
+        descriptor.fetchLimit = 10
+        guard let matches = try? context.fetch(descriptor) else { return nil }
+        return matches.lazy.compactMap { $0.visit }.first { $0.deletedAt == nil }
     }
 
     private func loadImportedIDs(in context: ModelContext) throws -> Set<String> {

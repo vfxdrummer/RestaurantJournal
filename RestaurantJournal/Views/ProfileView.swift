@@ -83,6 +83,30 @@ struct ProfileView: View {
                 }
                 .padding(.top, 8)
 
+                // Backup is a device/iCloud setting, not an account feature — reachable signed out.
+                NavigationLink {
+                    Form { CloudBackupSectionView() }
+                        .navigationTitle("iCloud Backup")
+                        .navigationBarTitleDisplayMode(.inline)
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "icloud")
+                            .foregroundStyle(.secondary)
+                        Text("iCloud Backup")
+                            .foregroundStyle(.primary)
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.footnote)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .padding()
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(Color(.secondarySystemBackground))
+                    )
+                }
+                .padding(.top, 4)
+
                 Spacer(minLength: 24)
             }
             .frame(maxWidth: .infinity)
@@ -170,6 +194,8 @@ struct ProfileView: View {
                 }
                 .padding(.vertical, 4)
             }
+
+            CloudBackupSectionView()
 
             if profile.avatar == nil {
                 Section {

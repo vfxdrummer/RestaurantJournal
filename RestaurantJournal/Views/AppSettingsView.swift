@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// Lightweight settings for the account-free (App Store) build: the anonymous-analytics opt-out and
-/// a link to the privacy policy. In `CARD_LINKING` builds the full ProfileView is shown instead.
+/// Lightweight settings for the account-free (App Store) build: iCloud backup, the anonymous-analytics
+/// opt-out, and a link to the privacy policy. In `CARD_LINKING` builds the full ProfileView is shown
+/// instead (it embeds the same iCloud backup section).
 struct AppSettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var analyticsEnabled = Analytics.isEnabled
@@ -11,6 +12,8 @@ struct AppSettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                CloudBackupSectionView()
+
                 Section {
                     Toggle("Share anonymous usage data", isOn: $analyticsEnabled)
                         .onChange(of: analyticsEnabled) { _, newValue in

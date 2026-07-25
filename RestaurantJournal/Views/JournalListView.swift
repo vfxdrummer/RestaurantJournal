@@ -160,6 +160,9 @@ struct JournalListView: View {
             .onChange(of: scanner.phase) { _, phase in
                 guard phase == .finished else { return }
                 // (scan_completed is logged in VisitDiscoveryService with the full funnel.)
+                // Now that the scan is idle, run iCloud maintenance (cloud-id + thumbnail backfill for
+                // the new visits) — it deferred while the scan held the context.
+                Task { await SyncMaintenance.run(context: modelContext) }
                 // Once a scan finishes without error, the onboarding scan is done — later scans
                 // (including Rescan All) may be cancelled from then on.
                 if scanner.errorMessage == nil { hasCompletedInitialScan = true }
@@ -378,7 +381,8 @@ struct JournalListView: View {
             if let photo = visit.coverPhoto {
                 PhotoThumbnailView(
                     localIdentifier: photo.localIdentifier,
-                    targetSize: CGSize(width: 120, height: 120)
+                    targetSize: CGSize(width: 120, height: 120),
+                    fallbackData: visit.coverThumbnailData
                 )
                 .frame(width: 55, height: 55)
                 .clipShape(RoundedRectangle(cornerRadius: 8))

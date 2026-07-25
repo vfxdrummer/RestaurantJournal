@@ -18,10 +18,12 @@ enum DataResetService {
         try? context.delete(model: Person.self)
         try? context.delete(model: DetectedFace.self)
         try? context.delete(model: FaceScannedPhoto.self)
+        try? context.delete(model: CachedPlaceLookup.self)
         try? context.save()
 
         removeVoiceFiles()
         EstablishmentLogoStore.clearMemoryCache()
+        GeoLookupCoordinator.shared.clearCache()
     }
 
     /// Remove the recorded `voice_*.m4a` files from the Documents directory.
