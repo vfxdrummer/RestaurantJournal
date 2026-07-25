@@ -57,17 +57,22 @@ struct RestaurantJournalApp: App {
                 print("[iCloudSync] CloudKit store active (\(cloudKitContainerID))")
                 return container
             } catch {
-                // Don't swallow it — record why so Settings can show "sync inactive" instead of a
-                // misleading green, and log the *underlying* reason (SwiftDataError alone is generic).
+                // Don't swallow it — surface the *real* reason (SwiftDataError alone is generic) both
+                // in Settings and the console, so we can diagnose without spelunking.
                 let ns = error as NSError
-                let underlying = ns.userInfo[NSUnderlyingErrorKey] as? NSError
-                cloudKitSetupError = underlying?.localizedDescription ?? error.localizedDescription
-                print("[iCloudSync] CloudKit init FAILED, falling back to local-only:")
-                print("[iCloudSync]   error: \(error)")
-                print("[iCloudSync]   NSError domain=\(ns.domain) code=\(ns.code) userInfo=\(ns.userInfo)")
-                if let underlying {
-                    print("[iCloudSync]   underlying: domain=\(underlying.domain) code=\(underlying.code) \(underlying.userInfo)")
+                var detail = String(reflecting: error)
+                if let underlying = ns.userInfo[NSUnderlyingErrorKey] as? NSError {
+                    detail += " ‖ underlying: \(underlying.localizedDescription) [\(underlying.domain) \(underlying.code)]"
                 }
+                if let reason = ns.userInfo[NSLocalizedFailureReasonErrorKey] as? String {
+                    detail += " ‖ reason: \(reason)"
+                }
+                if let dbg = ns.userInfo["NSDebugDescription"] as? String {
+                    detail += " ‖ \(dbg)"
+                }
+                cloudKitSetupError = detail
+                print("[iCloudSync] CloudKit init FAILED: \(detail)")
+                print("[iCloudSync]   full userInfo: \(ns.userInfo)")
             }
         }
 
