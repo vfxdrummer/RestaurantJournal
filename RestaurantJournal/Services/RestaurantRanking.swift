@@ -10,22 +10,36 @@ import Foundation
 /// top of this seed.
 enum RestaurantRanking {
 
-    /// Points a single visit contributes, by rating. Unrated visits count for a little (you went, so
-    /// there's mild positive signal); Meh actively pulls a place down.
-    static func value(for rating: VisitRating?) -> Double {
+    // Tunable weights. Quality (how much you love a place) dominates; frequency is a *bounded*
+    // booster so a mundane regular can't bury a beloved rare gem.
+    static let qualityWeight = 2.0
+    static let frequencyWeight = 0.5
+    /// Quality for a place you've visited but never rated — weak positive signal.
+    static let unratedBaseline = 0.5
+
+    /// Points for a single *rated* visit.
+    static func ratingValue(_ rating: VisitRating) -> Double {
         switch rating {
         case .yay: return 3
         case .okay: return 1
         case .meh: return -2
-        case nil: return 0.5
         }
     }
 
-    /// A restaurant's seed score: the sum of its live visits' rating values.
+    /// A restaurant's seed score. **Quality** = the average of its *rated* visits (so unrated visits
+    /// don't inflate it), plus a **diminishing** frequency bonus (`log2`), so "you loved it" outranks
+    /// "you happened to go a lot."
     static func score(for restaurant: Restaurant) -> Double {
-        restaurant.visits.reduce(0) { total, visit in
-            visit.deletedAt == nil ? total + value(for: visit.rating) : total
-        }
+        let visits = liveVisits(for: restaurant)
+        guard !visits.isEmpty else { return 0 }
+
+        let rated = visits.compactMap(\.rating)
+        let quality = rated.isEmpty
+            ? unratedBaseline
+            : rated.map(ratingValue).reduce(0, +) / Double(rated.count)
+
+        let frequencyBonus = log2(1 + Double(visits.count))
+        return quality * qualityWeight + frequencyBonus * frequencyWeight
     }
 
     /// The user's live visits at a restaurant (used for the row subtitle and to require ≥1 visit).
