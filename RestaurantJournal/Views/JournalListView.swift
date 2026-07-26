@@ -268,6 +268,11 @@ struct JournalListView: View {
                             }
                             if !visits.isEmpty {
                                 NavigationLink {
+                                    TopTenView()
+                                } label: {
+                                    Label("Your Top 10", systemImage: "trophy")
+                                }
+                                NavigationLink {
                                     RewardsView()
                                 } label: {
                                     Label("Rewards", systemImage: "gift")
