@@ -1,4 +1,5 @@
 import Foundation
+import SwiftData
 
 /// Ranks the user's restaurants for the "Top 10" — Phase 1: a *derived* score, computed on the fly
 /// from signal we already have (ratings + how often you've been), so it needs no stored field and no
@@ -47,15 +48,52 @@ enum RestaurantRanking {
         restaurant.visits.filter { $0.deletedAt == nil }
     }
 
-    /// Top-ranked restaurants (highest score first), excluding ignored places and any with no live
-    /// visits or a non-positive score (a place you only Meh'd shouldn't make your Top 10).
+    // MARK: - Comparison game (ELO on top of the seed)
+
+    private static let seedEloBase = 1500.0
+    private static let seedEloWeight = 40.0   // maps the ~0–8 seed onto the ELO scale
+    private static let eloK = 32.0
+
+    /// The derived seed expressed on the ELO scale, so compared and never-compared places sort on one
+    /// consistent scale.
+    static func seedElo(for restaurant: Restaurant) -> Double {
+        seedEloBase + score(for: restaurant) * seedEloWeight
+    }
+
+    /// The score the Top 10 sorts by: the refined ELO once the user has compared this place, else the
+    /// seed (mapped onto the ELO scale).
+    static func effectiveScore(for restaurant: Restaurant) -> Double {
+        restaurant.rankingScore ?? seedElo(for: restaurant)
+    }
+
+    /// Record one "A was better than B" comparison — standard ELO update, materializing each place's
+    /// score from its seed on first comparison.
+    static func recordComparison(winner: Restaurant, loser: Restaurant, in context: ModelContext) {
+        let ra = effectiveScore(for: winner)
+        let rb = effectiveScore(for: loser)
+        let expectedWin = 1 / (1 + pow(10, (rb - ra) / 400))
+        winner.rankingScore = ra + eloK * (1 - expectedWin)
+        loser.rankingScore = rb - eloK * (1 - expectedWin)
+        winner.rankingComparisons += 1
+        loser.rankingComparisons += 1
+        try? context.save()
+    }
+
+    /// Restaurants a user could rank: has a live visit, not ignored, and either a positive seed
+    /// (a favorite) or an explicit comparison score.
+    static func eligible(_ restaurants: [Restaurant]) -> [Restaurant] {
+        restaurants.filter { r in
+            !r.isIgnored
+                && !liveVisits(for: r).isEmpty
+                && (r.rankingScore != nil || score(for: r) > 0)
+        }
+    }
+
+    /// Top-ranked restaurants (highest effective score first).
     static func top(_ restaurants: [Restaurant], limit: Int = 10) -> [Restaurant] {
-        restaurants
-            .filter { !$0.isIgnored && !liveVisits(for: $0).isEmpty }
-            .map { (restaurant: $0, score: score(for: $0)) }
-            .filter { $0.score > 0 }
-            .sorted { $0.score > $1.score }
+        eligible(restaurants)
+            .sorted { effectiveScore(for: $0) > effectiveScore(for: $1) }
             .prefix(limit)
-            .map(\.restaurant)
+            .map { $0 }
     }
 }

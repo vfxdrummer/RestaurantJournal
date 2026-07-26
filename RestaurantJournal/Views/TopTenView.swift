@@ -1,20 +1,28 @@
 import SwiftUI
 import SwiftData
 
-/// The user's Top 10 restaurants, ranked by `RestaurantRanking` (ratings + how often they've been).
-/// Phase 1: a derived list — no comparisons yet, no stored score.
+/// The user's Top 10 restaurants, ranked by `RestaurantRanking` (ratings + frequency seed, refined
+/// by the comparison game). Searchable, so you can pull "Top 10 sushi" or "Top 10 in New York."
 struct TopTenView: View {
     @Query private var restaurants: [Restaurant]
+    @State private var searchText = ""
 
-    private var ranked: [Restaurant] { RestaurantRanking.top(restaurants) }
+    private var query: String { searchText.trimmingCharacters(in: .whitespaces).lowercased() }
+
+    private var ranked: [Restaurant] {
+        let base = query.isEmpty ? restaurants : restaurants.filter { matches($0) }
+        return RestaurantRanking.top(base, limit: 10)
+    }
 
     var body: some View {
         Group {
             if ranked.isEmpty {
                 ContentUnavailableView(
-                    "No Top 10 yet",
-                    systemImage: "trophy",
-                    description: Text("Rate your visits 😋 and the places you love — and keep going back to — rise to the top here.")
+                    query.isEmpty ? "No Top 10 yet" : "No matches",
+                    systemImage: query.isEmpty ? "trophy" : "magnifyingglass",
+                    description: Text(query.isEmpty
+                        ? "Rate your visits 😋 and the places you love — and keep going back to — rise to the top here."
+                        : "No favorites match “\(searchText)”. Try a city or a place name.")
                 )
             } else {
                 List {
@@ -23,13 +31,25 @@ struct TopTenView: View {
                             row(rank: index + 1, restaurant: restaurant)
                         }
                     } footer: {
-                        Text("Ranked from your ratings and how often you've visited. Rate more meals to sharpen it.")
+                        Text(query.isEmpty
+                            ? "Ranked from your ratings and how often you've visited. Tap Refine to sharpen it head-to-head."
+                            : "Your best-loved places matching “\(searchText)”.")
                     }
                 }
             }
         }
         .navigationTitle("Your Top 10")
         .navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $searchText, prompt: "sushi, New York…")
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                NavigationLink {
+                    RankingGameView()
+                } label: {
+                    Label("Refine", systemImage: "slider.horizontal.3")
+                }
+            }
+        }
     }
 
     @ViewBuilder
@@ -70,6 +90,18 @@ struct TopTenView: View {
                 }
             }
         }
+    }
+
+    private func matches(_ r: Restaurant) -> Bool {
+        if r.name.lowercased().contains(query) { return true }
+        for field in [r.city, r.region, r.country] where field?.lowercased().contains(query) == true {
+            return true
+        }
+        for v in RestaurantRanking.liveVisits(for: r) {
+            if v.userNote?.lowercased().contains(query) == true { return true }
+            if v.occasion?.lowercased().contains(query) == true { return true }
+        }
+        return false
     }
 
     private func subtitle(city: String?, visitCount: Int) -> String {
