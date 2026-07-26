@@ -44,6 +44,12 @@ final class Restaurant {
     /// keeps generating false positives). Set via "Stop detecting this place".
     var isIgnored: Bool = false
 
+    /// ELO-style ranking score, set once the user starts the "which was better?" comparison game.
+    /// nil = never compared → the Top 10 falls back to the derived seed (ratings + frequency).
+    var rankingScore: Double?
+    /// How many head-to-head comparisons this place has been in (pair selection + confidence).
+    var rankingComparisons: Int = 0
+
     // CloudKit requires to-many relationships to be OPTIONAL. Store it optional and expose a
     // non-optional `visits` computed accessor so existing call sites are unchanged.
     @Relationship(deleteRule: .cascade, inverse: \Visit.restaurant)
