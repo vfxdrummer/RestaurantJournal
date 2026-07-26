@@ -198,6 +198,9 @@ actor ScanEngine {
         } else if let existing = mergeableVisit(for: restaurant, cluster: cluster) {
             target = existing
         } else {
+            // Count prior live visits *before* creating this one → is this a repeat visit to a place
+            // the user has been before, and the Nth time? (Anonymous: a flag + a count, no place name.)
+            let priorVisits = restaurant.visits.filter { $0.deletedAt == nil }.count
             let visit = Visit(
                 date: cluster.startDate,
                 restaurant: restaurant,
@@ -208,7 +211,9 @@ actor ScanEngine {
             newVisitCount += 1
             target = visit
             Analytics.log("visit_created", [
-                "brand": LoyaltyDirectory.program(for: restaurant.name)?.brand ?? "Independent"
+                "brand": LoyaltyDirectory.program(for: restaurant.name)?.brand ?? "Independent",
+                "is_repeat": priorVisits > 0,
+                "visit_number": priorVisits + 1,
             ])
         }
 
