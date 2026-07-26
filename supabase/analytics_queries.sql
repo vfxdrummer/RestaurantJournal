@@ -7,6 +7,38 @@
 --   rating_set, map_opened, loyalty_join_tapped
 -- (signed_in/out, card_connected, ask_used are dev-only — accounts/cards/Ask are gated out.)
 -- Every event also carries: install_id, session (props->>'session'), authenticated, app_version.
+-- visit_created also carries: is_repeat (bool), visit_number (int).
+
+
+-- === HEADLINE TOTALS ===
+-- Total photos scanned ("Rescan all" re-scans everything, so this is scanning activity).
+select coalesce(sum((props->>'photos_scanned')::int), 0) as total_photos_scanned
+from events where name = 'scan_completed';
+
+-- Total visits created.
+select count(*) as total_visits_created
+from events where name = 'visit_created';
+
+
+-- === REPEAT DINING VISITS (north-star: habitual, not one-and-done) ===
+select
+  count(*) filter (where (props->>'is_repeat')::boolean)                as repeat_visits,
+  count(*)                                                              as total_visits,
+  round(100.0 * count(*) filter (where (props->>'is_repeat')::boolean)
+        / nullif(count(*), 0), 1)                                       as repeat_pct
+from events where name = 'visit_created';
+
+-- Loyalty depth: how many 2nd, 3rd, 5th… visits to the same place.
+select (props->>'visit_number')::int as visit_number, count(*) as visits
+from events where name = 'visit_created'
+group by 1 order by 1;
+
+-- Most habitual installs (repeat visits each).
+select install_id,
+       count(*)                                               as visits,
+       count(*) filter (where (props->>'is_repeat')::boolean) as repeat_visits
+from events where name = 'visit_created'
+group by 1 order by repeat_visits desc limit 25;
 
 
 -- === SCAN SUCCESS: photos scanned → visits added ===
