@@ -52,6 +52,58 @@ from events
 where name = 'scan_completed';
 
 
+-- === TIME SERIES (for graphing: scans / visits / repeat visits over time) ===
+-- SQL Editor shows a table; to draw a line, paste into Sheets, or build a chart in
+-- Dashboard → Reports (New chart → SQL) which renders these as line graphs directly.
+-- Swap 'day' for 'week' or 'month' in any date_trunc to change the bucket.
+
+-- Scans over time (photos scanned + visits added per day).
+select
+  date_trunc('day', created_at)::date  as day,
+  count(*)                             as scans,
+  sum((props->>'photos_scanned')::int) as photos_scanned,
+  sum((props->>'visits_added')::int)   as visits_added
+from events
+where name = 'scan_completed'
+group by 1
+order by 1;
+
+-- Visits added over time (one row per created visit — cleaner than scan-reported counts).
+select
+  date_trunc('day', created_at)::date as day,
+  count(*)                            as visits_added
+from events
+where name = 'visit_created'
+group by 1
+order by 1;
+
+-- Repeat dining visits over time (habit forming — the north-star curve).
+select
+  date_trunc('day', created_at)::date                                as day,
+  count(*) filter (where (props->>'is_repeat')::boolean)             as repeat_visits,
+  count(*)                                                           as all_visits
+from events
+where name = 'visit_created'
+group by 1
+order by 1;
+
+-- Cumulative (running totals) — the "up and to the right" version of the three above.
+select
+  day,
+  sum(visits_added)  over (order by day) as cumulative_visits,
+  sum(repeat_visits) over (order by day) as cumulative_repeat_visits
+from (
+  select
+    date_trunc('day', created_at)::date                     as day,
+    count(*)                                                as visits_added,
+    count(*) filter (where (props->>'is_repeat')::boolean)  as repeat_visits
+  from events
+  where name = 'visit_created'
+  group by 1
+) d
+order by day;
+
+
 -- === VISITS PER BRAND (chains vs "Independent") ===
 select props->>'brand' as brand, count(*) as visits
 from events
