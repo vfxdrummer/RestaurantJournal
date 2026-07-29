@@ -45,6 +45,7 @@ struct ScanStatusView: View {
                 // Stage 1 — screening photos (CPU-bound, fast).
                 progressRow(
                     title: "Scanning photos",
+                    month: Self.monthLabel(scanner.screeningDate),
                     detail: "\(scanner.processed) of \(scanner.total)",
                     value: scanner.progress
                 )
@@ -52,6 +53,7 @@ struct ScanStatusView: View {
                 // Stage 2 — matching places (runs at the same time, paced by MapKit's limit).
                 progressRow(
                     title: "Matching places",
+                    month: Self.monthLabel(scanner.matchingDate),
                     detail: scanner.matchTotal > 0
                         ? "\(scanner.newVisitCount)/\(scanner.matchTotal) found"
                         : "\(scanner.newVisitCount) found",
@@ -91,10 +93,14 @@ struct ScanStatusView: View {
     }
 
     @ViewBuilder
-    private func progressRow(title: String, detail: String, value: Double) -> some View {
+    private func progressRow(title: String, month: String?, detail: String, value: Double) -> some View {
         VStack(alignment: .leading, spacing: 3) {
-            HStack {
+            HStack(spacing: 6) {
                 Text(title)
+                if let month {
+                    Text(month)
+                        .foregroundStyle(.tertiary)
+                }
                 Spacer()
                 Text(detail)
             }
@@ -103,4 +109,16 @@ struct ScanStatusView: View {
             ProgressView(value: value)
         }
     }
+
+    /// "June 2026" for the photos a stage is currently on, or nil before it starts.
+    private static func monthLabel(_ date: Date?) -> String? {
+        guard let date else { return nil }
+        return monthFormatter.string(from: date)
+    }
+
+    private static let monthFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "LLLL yyyy"
+        return f
+    }()
 }

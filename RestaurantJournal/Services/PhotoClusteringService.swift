@@ -17,12 +17,16 @@ enum PhotoClusteringService {
     /// Minimum photos required to consider a cluster a "visit" candidate
     static let minPhotosPerCluster: Int = 1
 
-    /// Fetch all photo library assets that have location + were taken since `since`.
-    static func fetchAssets(since: Date? = nil) -> [PHAsset] {
+    /// Fetch all located photo library assets, optionally bounded to a date range — `after` (newer
+    /// than) for the "new photos" pass, `before` (older than) for the historical backfill pass.
+    static func fetchAssets(after: Date? = nil, before: Date? = nil) -> [PHAsset] {
         let options = PHFetchOptions()
         var predicates: [NSPredicate] = []
-        if let since {
-            predicates.append(NSPredicate(format: "creationDate > %@", since as NSDate))
+        if let after {
+            predicates.append(NSPredicate(format: "creationDate > %@", after as NSDate))
+        }
+        if let before {
+            predicates.append(NSPredicate(format: "creationDate < %@", before as NSDate))
         }
         // Photos and videos (both carry geotags + timestamps and cluster the same way).
         predicates.append(NSPredicate(
@@ -39,6 +43,25 @@ enum PhotoClusteringService {
             if asset.location != nil { assets.append(asset) }
         }
         return assets
+    }
+
+    /// The creation dates of the oldest and newest photo/video in the library — used to seed the
+    /// scanned window for installs migrating from the old watermark engine. Cheap: `fetchLimit = 1`
+    /// each, no enumeration.
+    static func assetDateBounds() -> (oldest: Date, newest: Date)? {
+        func bound(ascending: Bool) -> Date? {
+            let options = PHFetchOptions()
+            options.predicate = NSPredicate(
+                format: "mediaType == %d OR mediaType == %d",
+                PHAssetMediaType.image.rawValue,
+                PHAssetMediaType.video.rawValue
+            )
+            options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: ascending)]
+            options.fetchLimit = 1
+            return PHAsset.fetchAssets(with: options).firstObject?.creationDate
+        }
+        guard let oldest = bound(ascending: true), let newest = bound(ascending: false) else { return nil }
+        return (oldest, newest)
     }
 
     /// Cluster assets by time + spatial proximity.

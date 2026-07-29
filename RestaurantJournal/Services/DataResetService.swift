@@ -24,6 +24,14 @@ enum DataResetService {
         try? context.delete(model: CachedPlaceLookup.self)
         try? context.save()
 
+        // Scan bookkeeping lives in UserDefaults, not SwiftData — clear it too so a reset truly
+        // starts from scratch. Without this the coverage window would survive and the next scan would
+        // think the whole library is already covered and import nothing.
+        ScanCoverage.clear()
+        let defaults = UserDefaults.standard
+        defaults.removeObject(forKey: "hasCompletedInitialScan")
+        defaults.removeObject(forKey: "lastNegativeRescanVersion")
+
         removeVoiceFiles()
         EstablishmentLogoStore.clearMemoryCache()
     }
