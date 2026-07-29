@@ -30,6 +30,9 @@ struct JournalListView: View {
     @State private var showingRescanConfirmation = false
     @State private var bulkPromptRestaurant: Restaurant?
     @State private var viewMode: JournalMode = .list
+    /// When true, every month section is folded to just its header, turning the list into a compact
+    /// month index you can jump around. Toggled by the +/- button on any header.
+    @State private var sectionsCollapsed = false
     @AppStorage("onlyVisitsWithPhotos") private var onlyVisitsWithPhotos = false
     /// Shared with the map so the rating filter carries across views.
     @AppStorage("visitRatingFilter") private var ratingFilterRaw = ""
@@ -74,13 +77,15 @@ struct JournalListView: View {
         return formatter
     }()
 
-    /// The filtered visits grouped into month/year sections, preserving newest-first order.
+    /// The filtered visits grouped into month/year sections, preserving newest-first order. Visits
+    /// arrive already sorted by date (descending), so same-month visits are adjacent — group in a
+    /// single O(n) pass by comparing to the last group rather than searching all groups.
     private var groupedVisits: [(title: String, visits: [Visit])] {
         var groups: [(title: String, visits: [Visit])] = []
         for visit in filteredVisits {
             let title = Self.monthFormatter.string(from: visit.date)
-            if let index = groups.firstIndex(where: { $0.title == title }) {
-                groups[index].visits.append(visit)
+            if groups.last?.title == title {
+                groups[groups.count - 1].visits.append(visit)
             } else {
                 groups.append((title, [visit]))
             }
@@ -119,15 +124,24 @@ struct JournalListView: View {
                         .background(.bar)
                         Divider()
 
-                        List {
-                            ForEach(groupedVisits, id: \.title) { group in
-                                Section(group.title) {
-                                    ForEach(group.visits) { visit in
-                                        NavigationLink(destination: VisitDetailView(visit: visit)) {
-                                            row(for: visit)
+                        ScrollViewReader { proxy in
+                            List {
+                                ForEach(groupedVisits, id: \.title) { group in
+                                    Section {
+                                        // Collapse folds sections to headers — but while searching,
+                                        // always show matches regardless of collapse state.
+                                        if !sectionsCollapsed || !searchText.isEmpty {
+                                            ForEach(group.visits) { visit in
+                                                NavigationLink(destination: VisitDetailView(visit: visit)) {
+                                                    row(for: visit)
+                                                }
+                                            }
+                                            .onDelete { offsets in deleteVisits(offsets, in: group.visits) }
                                         }
+                                    } header: {
+                                        sectionHeader(for: group, proxy: proxy)
                                     }
-                                    .onDelete { offsets in deleteVisits(offsets, in: group.visits) }
+                                    .id(group.title)
                                 }
                             }
                         }
@@ -370,7 +384,33 @@ struct JournalListView: View {
         .shadow(color: .black.opacity(0.15), radius: 8, y: 2)
     }
 
+    /// A month header with a running visit count and a +/- button that folds/unfolds *all* sections
+    /// at once (a universal expand/collapse), keeping the tapped month centered so you don't lose your
+    /// place. Collapsed, the list becomes a compact month index you can scan and jump through.
     @ViewBuilder
+    private func sectionHeader(for group: (title: String, visits: [Visit]), proxy: ScrollViewProxy) -> some View {
+        HStack {
+            Text(group.title)
+            Spacer()
+            Text("\(group.visits.count)")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .monospacedDigit()
+            Button {
+                withAnimation(.snappy) { sectionsCollapsed.toggle() }
+                // Re-center the tapped month once the fold/unfold has changed the layout.
+                DispatchQueue.main.async {
+                    withAnimation(.snappy) { proxy.scrollTo(group.title, anchor: .center) }
+                }
+            } label: {
+                Image(systemName: sectionsCollapsed ? "plus.circle" : "minus.circle")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(sectionsCollapsed ? "Expand all months" : "Collapse all months")
+        }
+    }
+
     private func row(for visit: Visit) -> some View {
         HStack {
             if let photo = visit.coverPhoto {
