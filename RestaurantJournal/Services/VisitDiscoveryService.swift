@@ -30,6 +30,9 @@ final class VisitDiscoveryService {
     /// Second, concurrent stage: places matched vs. dining clusters found so far.
     private(set) var matchProcessed = 0
     private(set) var matchTotal = 0
+    /// The month each stage is currently working through (newest-first), for a "June 2026" label.
+    private(set) var screeningDate: Date?
+    private(set) var matchingDate: Date?
 
     var progress: Double { total > 0 ? Double(processed) / Double(total) : 0 }
     var matchProgress: Double { matchTotal > 0 ? Double(matchProcessed) / Double(matchTotal) : 0 }
@@ -123,6 +126,8 @@ final class VisitDiscoveryService {
         matchProcessed = snapshot.matchProcessed
         matchTotal = snapshot.matchTotal
         newVisitCount = snapshot.newVisitCount
+        screeningDate = snapshot.screeningDate
+        matchingDate = snapshot.matchingDate
     }
 
     private func requestPhotoAuth() async -> PHAuthorizationStatus {

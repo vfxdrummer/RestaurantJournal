@@ -10,6 +10,10 @@ struct ScanSnapshot: Sendable {
     var matchProcessed = 0
     var matchTotal = 0
     var newVisitCount = 0
+    /// The date of the photos each stage is currently working through — shown as a "June 2026" label
+    /// so the user can watch the scan march backward through their library (newest-first).
+    var screeningDate: Date?
+    var matchingDate: Date?
 }
 
 /// The result of a completed (or cancelled) scan.
@@ -69,6 +73,8 @@ actor ScanEngine {
     private var matchProcessed = 0
     private var matchTotal = 0
     private var newVisitCount = 0
+    private var currentScreenDate: Date?
+    private var currentMatchDate: Date?
 
     func run(
         doFull: Bool,
@@ -174,6 +180,7 @@ actor ScanEngine {
             await waitWhilePaused(control)
             if control.isCancelled { interrupted = true; break }
             let cluster = pass.cluster
+            currentScreenDate = cluster.startDate
             let base = processed
 
             var diningMatches = 0
@@ -286,6 +293,7 @@ actor ScanEngine {
             if index < diningQueue.count {
                 let cluster = diningQueue[index]
                 index += 1
+                currentMatchDate = cluster.startDate
                 await resolvePlace(for: cluster)
                 matchProcessed += 1
                 sinceSave += 1
@@ -377,7 +385,8 @@ actor ScanEngine {
     private func snapshot() -> ScanSnapshot {
         ScanSnapshot(processed: processed, total: total,
                      matchProcessed: matchProcessed, matchTotal: matchTotal,
-                     newVisitCount: newVisitCount)
+                     newVisitCount: newVisitCount,
+                     screeningDate: currentScreenDate, matchingDate: currentMatchDate)
     }
 
     private func loadImportedIDs() -> Set<String> {
