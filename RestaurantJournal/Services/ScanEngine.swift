@@ -38,11 +38,22 @@ final class ScanControl: @unchecked Sendable {
 /// main thread. The UI's `@Query` picks up the writes via SwiftData's cross-context merging, and the
 /// main thread stays free, so screening is fast and there are no periodic save-freezes. Progress is
 /// reported back to the main-actor service via `report`.
+/// One clustered dining candidate tagged with which pass produced it — the *new* pass (photos taken
+/// since the last scan) or the historical *backfill* pass. The tag drives how coverage pointers move.
+private struct PassCluster {
+    let cluster: PhotoCluster
+    let isNew: Bool
+}
+
 @ModelActor
 actor ScanEngine {
     // Shared state held as actor properties so the two concurrent loops (below) can use it without
     // capturing non-Sendable values (SwiftData models / PHAssets aren't Sendable).
-    private var clusters: [PhotoCluster] = []
+    private var passClusters: [PassCluster] = []
+    /// How many of `passClusters` belong to the new pass (they lead the array). The new pass is
+    /// "connected" — and `begin` may advance — only once all of them are screened.
+    private var numNewClusters = 0
+    private var coverage = ScanCoverage()
     private var screenCache: [String: ScreenedPhoto] = [:]
     private var dismissedIds: Set<String> = []
     private var classifierVersion = 0
@@ -64,20 +75,52 @@ actor ScanEngine {
         report: @escaping @Sendable (ScanSnapshot) async -> Void
     ) async -> ScanOutcome {
         classifierVersion = RestaurantPhotoClassifier.version
-
-        // Reads (background context).
-        let since = doFull ? nil : latestPhotoDate()
-        let importedIDs = loadImportedIDs()
-        let assets = PhotoClusteringService.fetchAssets(since: since)
-            .filter { !importedIDs.contains($0.localIdentifier) }
-        guard !assets.isEmpty else {
-            return ScanOutcome(completedFullSweep: doFull, noNewPhotos: true)
-        }
-        total = assets.count
-        let scannedPhotoCount = assets.count
-        clusters = PhotoClusteringService.cluster(assets)
         screenCache = loadScreenCache()
         dismissedIds = loadDismissedIDs()
+        let importedIDs = loadImportedIDs()
+
+        // The committed, contiguous scanned window is [end, begin]. A full rescan throws it away and
+        // rebuilds from scratch (existing users with no window yet also start here).
+        coverage = doFull ? ScanCoverage() : ScanCoverage.load()
+
+        // Build two ordered passes, each newest-first, with the new pass leading so recent visits
+        // surface first:
+        //  • NEW      — photos taken since `begin` (only once a window exists).
+        //  • BACKFILL — the historical catch-up: photos older than `end`. On the first scan (no window
+        //    yet) the whole library is backfill; skipped once the sweep is complete.
+        let newAssets: [PHAsset]
+        if let begin = coverage.begin {
+            newAssets = PhotoClusteringService.fetchAssets(after: begin)
+                .filter { !importedIDs.contains($0.localIdentifier) }
+        } else {
+            newAssets = []
+        }
+
+        let backfillAssets: [PHAsset]
+        if coverage.begin == nil {
+            backfillAssets = PhotoClusteringService.fetchAssets()
+                .filter { !importedIDs.contains($0.localIdentifier) }
+        } else if !coverage.fullSweepComplete, let end = coverage.end {
+            backfillAssets = PhotoClusteringService.fetchAssets(before: end)
+                .filter { !importedIDs.contains($0.localIdentifier) }
+        } else {
+            backfillAssets = []
+        }
+
+        // `cluster` returns clusters oldest-first; reverse so each pass is processed newest-first.
+        let newClusters = PhotoClusteringService.cluster(newAssets).reversed()
+            .map { PassCluster(cluster: $0, isNew: true) }
+        let backfillClusters = PhotoClusteringService.cluster(backfillAssets).reversed()
+            .map { PassCluster(cluster: $0, isNew: false) }
+        passClusters = newClusters + backfillClusters
+        numNewClusters = newClusters.count
+
+        guard !passClusters.isEmpty else {
+            return ScanOutcome(completedFullSweep: coverage.fullSweepComplete, noNewPhotos: true)
+        }
+
+        total = passClusters.reduce(0) { $0 + $1.cluster.assets.count }
+        let scannedPhotoCount = total
         await report(snapshot())
 
         // Two concurrent stages that interleave on the engine's executor (off the main thread):
@@ -88,13 +131,14 @@ actor ScanEngine {
         _ = await matching
 
         try? modelContext.save()
+        coverage.save()
         await report(snapshot())
 
         return ScanOutcome(
             scannedPhotoCount: scannedPhotoCount,
             newVisitCount: newVisitCount,
             cancelled: control.isCancelled,
-            completedFullSweep: !control.isCancelled && doFull
+            completedFullSweep: coverage.fullSweepComplete
         )
     }
 
@@ -102,9 +146,14 @@ actor ScanEngine {
 
     private func screenLoop(control: ScanControl, report: @escaping @Sendable (ScanSnapshot) async -> Void) async {
         var sinceSave = 0
-        for cluster in clusters {
+        var interrupted = false
+        var newPassMaxDate: Date?
+        var processedNewClusters = 0
+
+        for pass in passClusters {
             await waitWhilePaused(control)
-            if control.isCancelled { break }
+            if control.isCancelled { interrupted = true; break }
+            let cluster = pass.cluster
             let base = processed
 
             var diningMatches = 0
@@ -140,11 +189,36 @@ actor ScanEngine {
                 }
             }
             processed = base + cluster.assets.count
-            if control.isCancelled { break }
+
+            // Cancelled part-way through this cluster → it isn't fully screened, so don't advance the
+            // coverage pointers past it. That refusal is exactly what keeps the window hole-free.
+            if control.isCancelled { interrupted = true; break }
+
             if looksLikeDining {
                 diningQueue.append(cluster)
                 matchTotal += 1
             }
+
+            // Advance coverage — the asymmetry between the two passes is the whole trick:
+            if pass.isNew {
+                // NEW pass: do NOT move `begin` yet. Only once every new cluster is screened (the pass
+                // has connected back down to the old `begin`) is it safe to jump `begin` up to the
+                // newest photo. Interrupt before then and `begin` stays put; a re-run re-sweeps
+                // newest→begin (the ScreenedPhoto cache skips what's done) and no gap is ever committed.
+                newPassMaxDate = maxDate(newPassMaxDate, cluster.endDate)
+                processedNewClusters += 1
+                if processedNewClusters == numNewClusters {
+                    coverage.begin = maxDate(coverage.begin, newPassMaxDate)
+                    coverage.save()
+                }
+            } else {
+                // BACKFILL: extends the window's bottom edge into never-scanned ground, so it stays
+                // contiguous and can commit continuously. The first scan also establishes `begin` here.
+                if coverage.begin == nil { coverage.begin = cluster.endDate }
+                coverage.end = minDate(coverage.end, cluster.startDate)
+                coverage.save()
+            }
+
             sinceSave += 1
             if sinceSave >= 20 {
                 try? modelContext.save()
@@ -153,8 +227,33 @@ actor ScanEngine {
             }
         }
         try? modelContext.save()
+
+        // A backfill pass that ran to the end uninterrupted means we reached the oldest photo — the
+        // library is fully swept, so only the cheap new-photo pass runs from here on.
+        let hadBackfill = passClusters.count > numNewClusters
+        if !interrupted && hadBackfill {
+            coverage.fullSweepComplete = true
+        }
+        coverage.save()
+
         screeningFinished = true
         await report(snapshot())
+    }
+
+    private func maxDate(_ a: Date?, _ b: Date?) -> Date? {
+        switch (a, b) {
+        case (nil, _): return b
+        case (_, nil): return a
+        case let (x?, y?): return max(x, y)
+        }
+    }
+
+    private func minDate(_ a: Date?, _ b: Date?) -> Date? {
+        switch (a, b) {
+        case (nil, _): return b
+        case (_, nil): return a
+        case let (x?, y?): return min(x, y)
+        }
     }
 
     // MARK: - Consumer: matching
@@ -259,12 +358,6 @@ actor ScanEngine {
         ScanSnapshot(processed: processed, total: total,
                      matchProcessed: matchProcessed, matchTotal: matchTotal,
                      newVisitCount: newVisitCount)
-    }
-
-    private func latestPhotoDate() -> Date? {
-        var descriptor = FetchDescriptor<PhotoAsset>(sortBy: [SortDescriptor(\.takenAt, order: .reverse)])
-        descriptor.fetchLimit = 1
-        return (try? modelContext.fetch(descriptor))?.first?.takenAt
     }
 
     private func loadImportedIDs() -> Set<String> {

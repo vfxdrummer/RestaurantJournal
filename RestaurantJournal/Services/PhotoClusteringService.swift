@@ -17,12 +17,16 @@ enum PhotoClusteringService {
     /// Minimum photos required to consider a cluster a "visit" candidate
     static let minPhotosPerCluster: Int = 1
 
-    /// Fetch all photo library assets that have location + were taken since `since`.
-    static func fetchAssets(since: Date? = nil) -> [PHAsset] {
+    /// Fetch all located photo library assets, optionally bounded to a date range — `after` (newer
+    /// than) for the "new photos" pass, `before` (older than) for the historical backfill pass.
+    static func fetchAssets(after: Date? = nil, before: Date? = nil) -> [PHAsset] {
         let options = PHFetchOptions()
         var predicates: [NSPredicate] = []
-        if let since {
-            predicates.append(NSPredicate(format: "creationDate > %@", since as NSDate))
+        if let after {
+            predicates.append(NSPredicate(format: "creationDate > %@", after as NSDate))
+        }
+        if let before {
+            predicates.append(NSPredicate(format: "creationDate < %@", before as NSDate))
         }
         // Photos and videos (both carry geotags + timestamps and cluster the same way).
         predicates.append(NSPredicate(
