@@ -28,6 +28,17 @@ struct ScanCoverage {
     private static let beginKey = "scanCoverageBegin"
     private static let endKey = "scanCoverageEnd"
     private static let sweepKey = "scanCoverageFullSweepComplete"
+    /// Set once a real window exists (seeded on migration, or built by a completed sweep), so an
+    /// install that already has a window is never retroactively re-seeded. Owned here so it's cleared
+    /// together with the window on a data reset.
+    static let seededKey = "scanCoverageSeeded"
+
+    /// Forget the scanned window entirely — used by a data reset so the next scan starts from scratch
+    /// (otherwise a stale window would make it think the whole library is already covered).
+    static func clear() {
+        let d = UserDefaults.standard
+        [beginKey, endKey, sweepKey, seededKey].forEach { d.removeObject(forKey: $0) }
+    }
 
     static func load() -> ScanCoverage {
         let d = UserDefaults.standard

@@ -33,11 +33,6 @@ final class ScanControl: @unchecked Sendable {
     func setPaused(_ value: Bool) { lock.lock(); _paused = value; lock.unlock() }
 }
 
-/// Runs the entire scan — screening (Vision) and place-matching — on a **background** `ModelContext`,
-/// so every `save()` (and the CloudKit mirroring it triggers on the synced store) happens off the
-/// main thread. The UI's `@Query` picks up the writes via SwiftData's cross-context merging, and the
-/// main thread stays free, so screening is fast and there are no periodic save-freezes. Progress is
-/// reported back to the main-actor service via `report`.
 /// One clustered dining candidate tagged with which pass produced it — the *new* pass (photos taken
 /// since the last scan) or the historical *backfill* pass. The tag drives how coverage pointers move.
 private struct PassCluster {
@@ -45,11 +40,13 @@ private struct PassCluster {
     let isNew: Bool
 }
 
+/// Runs the entire scan — screening (Vision) and place-matching — on a **background** `ModelContext`,
+/// so every `save()` (and the CloudKit mirroring it triggers on the synced store) happens off the
+/// main thread. The UI's `@Query` picks up the writes via SwiftData's cross-context merging, and the
+/// main thread stays free, so screening is fast and there are no periodic save-freezes. Progress is
+/// reported back to the main-actor service via `report`.
 @ModelActor
 actor ScanEngine {
-    /// Set once the coverage window exists (seeded on migration, or built by a completed sweep), so
-    /// an install that already has a real window is never retroactively re-seeded.
-    private static let coverageSeededKey = "scanCoverageSeeded"
 
     // Shared state held as actor properties so the two concurrent loops (below) can use it without
     // capturing non-Sendable values (SwiftData models / PHAssets aren't Sendable).
@@ -93,13 +90,13 @@ actor ScanEngine {
         // Instead, trust the completed prior sweep and seed the window to the library's date range —
         // future scans are then purely incremental. A manual "Rescan all" still forces a real sweep.
         if !doFull,
-           !UserDefaults.standard.bool(forKey: Self.coverageSeededKey),
+           !UserDefaults.standard.bool(forKey: ScanCoverage.seededKey),
            UserDefaults.standard.bool(forKey: "hasCompletedInitialScan"),
            !screenCache.isEmpty,
            let bounds = PhotoClusteringService.assetDateBounds() {
             coverage = ScanCoverage(begin: bounds.newest, end: bounds.oldest, fullSweepComplete: true)
             coverage.save()
-            UserDefaults.standard.set(true, forKey: Self.coverageSeededKey)
+            UserDefaults.standard.set(true, forKey: ScanCoverage.seededKey)
         }
 
         // Build two ordered passes, each newest-first, with the new pass leading so recent visits
@@ -153,7 +150,7 @@ actor ScanEngine {
         coverage.save()
         // A completed sweep means this install now has a real window — never re-seed it later.
         if coverage.fullSweepComplete {
-            UserDefaults.standard.set(true, forKey: Self.coverageSeededKey)
+            UserDefaults.standard.set(true, forKey: ScanCoverage.seededKey)
         }
         await report(snapshot())
 
