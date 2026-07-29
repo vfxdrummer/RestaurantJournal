@@ -21,7 +21,6 @@ struct JournalListView: View {
     private var ignoredRestaurants: [Restaurant]
 
     @State private var scanner = VisitDiscoveryService()
-    @State private var showResetConfirmation = false
     @State private var celebrationCount: Int?
     @State private var searchText = ""
 #if ASK_FEATURE
@@ -302,10 +301,10 @@ struct JournalListView: View {
                             }
 #if DEBUG
                             Divider()
-                            Button(role: .destructive) {
-                                showResetConfirmation = true
+                            NavigationLink {
+                                DebugToolsView()
                             } label: {
-                                Label("Reset All Data…", systemImage: "exclamationmark.arrow.circlepath")
+                                Label("Test Lab (backup · reset · restore)", systemImage: "hammer")
                             }
 #endif
                         } label: {
@@ -352,20 +351,6 @@ struct JournalListView: View {
                 let count = restaurant.visits.filter { $0.deletedAt == nil }.count
                 Text("There \(count == 1 ? "is" : "are") \(count) more visit\(count == 1 ? "" : "s") at \(restaurant.name). If this isn't a place you dine — say it's next to your home — remove them all and stop detecting it here.")
             }
-#if DEBUG
-            .confirmationDialog(
-                "Reset all data?",
-                isPresented: $showResetConfirmation,
-                titleVisibility: .visible
-            ) {
-                Button("Delete everything", role: .destructive) {
-                    DataResetService.resetAll(in: modelContext)
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("Deletes all visits, restaurants, screening and logo caches, and voice notes. For testing ingestion from scratch.")
-            }
-#endif
         }
     }
 
