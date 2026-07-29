@@ -45,6 +45,25 @@ enum PhotoClusteringService {
         return assets
     }
 
+    /// The creation dates of the oldest and newest photo/video in the library — used to seed the
+    /// scanned window for installs migrating from the old watermark engine. Cheap: `fetchLimit = 1`
+    /// each, no enumeration.
+    static func assetDateBounds() -> (oldest: Date, newest: Date)? {
+        func bound(ascending: Bool) -> Date? {
+            let options = PHFetchOptions()
+            options.predicate = NSPredicate(
+                format: "mediaType == %d OR mediaType == %d",
+                PHAssetMediaType.image.rawValue,
+                PHAssetMediaType.video.rawValue
+            )
+            options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: ascending)]
+            options.fetchLimit = 1
+            return PHAsset.fetchAssets(with: options).firstObject?.creationDate
+        }
+        guard let oldest = bound(ascending: true), let newest = bound(ascending: false) else { return nil }
+        return (oldest, newest)
+    }
+
     /// Cluster assets by time + spatial proximity.
     static func cluster(_ assets: [PHAsset]) -> [PhotoCluster] {
         let sorted = assets.sorted {

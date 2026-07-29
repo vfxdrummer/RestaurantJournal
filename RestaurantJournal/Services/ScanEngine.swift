@@ -47,6 +47,10 @@ private struct PassCluster {
 
 @ModelActor
 actor ScanEngine {
+    /// Set once the coverage window exists (seeded on migration, or built by a completed sweep), so
+    /// an install that already has a real window is never retroactively re-seeded.
+    private static let coverageSeededKey = "scanCoverageSeeded"
+
     // Shared state held as actor properties so the two concurrent loops (below) can use it without
     // capturing non-Sendable values (SwiftData models / PHAssets aren't Sendable).
     private var passClusters: [PassCluster] = []
@@ -80,8 +84,23 @@ actor ScanEngine {
         let importedIDs = loadImportedIDs()
 
         // The committed, contiguous scanned window is [end, begin]. A full rescan throws it away and
-        // rebuilds from scratch (existing users with no window yet also start here).
+        // rebuilds from scratch.
         coverage = doFull ? ScanCoverage() : ScanCoverage.load()
+
+        // One-time migration for installs that already scanned under the old watermark engine: they
+        // have no coverage window, so a normal run would treat the whole library as backfill and
+        // slowly re-match every dining photo that never became a visit (home meals, coffee, etc.).
+        // Instead, trust the completed prior sweep and seed the window to the library's date range —
+        // future scans are then purely incremental. A manual "Rescan all" still forces a real sweep.
+        if !doFull,
+           !UserDefaults.standard.bool(forKey: Self.coverageSeededKey),
+           UserDefaults.standard.bool(forKey: "hasCompletedInitialScan"),
+           !screenCache.isEmpty,
+           let bounds = PhotoClusteringService.assetDateBounds() {
+            coverage = ScanCoverage(begin: bounds.newest, end: bounds.oldest, fullSweepComplete: true)
+            coverage.save()
+            UserDefaults.standard.set(true, forKey: Self.coverageSeededKey)
+        }
 
         // Build two ordered passes, each newest-first, with the new pass leading so recent visits
         // surface first:
@@ -132,6 +151,10 @@ actor ScanEngine {
 
         try? modelContext.save()
         coverage.save()
+        // A completed sweep means this install now has a real window — never re-seed it later.
+        if coverage.fullSweepComplete {
+            UserDefaults.standard.set(true, forKey: Self.coverageSeededKey)
+        }
         await report(snapshot())
 
         return ScanOutcome(
