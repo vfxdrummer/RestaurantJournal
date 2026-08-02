@@ -110,16 +110,25 @@ actor ScanEngine {
         //  • NEW      — photos taken since `begin` (only once a window exists).
         //  • BACKFILL — the historical catch-up: photos older than `end`. On the first scan (no window
         //    yet) the whole library is backfill; skipped once the sweep is complete.
+        // New-photo frontier: the newest photo already imported into a visit — NOT the raw library
+        // date bounds. A single stray asset with a future/odd creation date (a saved image, an edited
+        // timestamp, a timezone quirk) would otherwise push the window past your real photos and
+        // strand every genuinely-new photo in the "already-covered" gap (the "it missed tonight's
+        // visit while backfilling 2020" bug). The imported frontier is real dining data and can't be
+        // poisoned that way. A window exists once we have any imports OR a saved coverage begin.
+        let newFrontier = newestImportedDate()
+        let hasWindow = newFrontier != nil || coverage.begin != nil
         let newAssets: [PHAsset]
-        if let begin = coverage.begin {
-            newAssets = PhotoClusteringService.fetchAssets(after: begin)
+        if let newFrontier {
+            newAssets = PhotoClusteringService.fetchAssets(after: newFrontier)
                 .filter { !importedIDs.contains($0.localIdentifier) }
         } else {
             newAssets = []
         }
 
         let backfillAssets: [PHAsset]
-        if coverage.begin == nil {
+        if !hasWindow {
+            // Truly first scan (no imports, no window): the whole library is the backfill.
             backfillAssets = PhotoClusteringService.fetchAssets()
                 .filter { !importedIDs.contains($0.localIdentifier) }
         } else if !coverage.fullSweepComplete, let end = coverage.end {
@@ -387,6 +396,14 @@ actor ScanEngine {
                      matchProcessed: matchProcessed, matchTotal: matchTotal,
                      newVisitCount: newVisitCount,
                      screeningDate: currentScreenDate, matchingDate: currentMatchDate)
+    }
+
+    /// The creation date of the newest photo already imported into a visit — a poison-proof frontier
+    /// for the new-photo pass (real dining data, unlike raw library date bounds).
+    private func newestImportedDate() -> Date? {
+        var descriptor = FetchDescriptor<PhotoAsset>(sortBy: [SortDescriptor(\.takenAt, order: .reverse)])
+        descriptor.fetchLimit = 1
+        return (try? modelContext.fetch(descriptor))?.first?.takenAt
     }
 
     private func loadImportedIDs() -> Set<String> {
