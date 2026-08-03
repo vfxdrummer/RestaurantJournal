@@ -176,15 +176,25 @@ struct JournalListView: View {
                 // Now that the scan is idle, run iCloud maintenance (cloud-id + thumbnail backfill for
                 // the new visits) — it deferred while the scan held the context.
                 Task { await SyncMaintenance.run(context: modelContext) }
+                // Whether this was the onboarding scan — captured before we flip the flag below, so we
+                // never ask a brand-new user to rate right after their first scan.
+                let wasFirstScan = !hasCompletedInitialScan
                 // Once a scan finishes without error, the onboarding scan is done — later scans
                 // (including Rescan All) may be cancelled from then on.
                 if scanner.errorMessage == nil { hasCompletedInitialScan = true }
                 if scanner.newVisitCount > 0 {
                     UINotificationFeedbackGenerator().notificationOccurred(.success)
                     withAnimation { celebrationCount = scanner.newVisitCount }
+                    let newVisits = scanner.newVisitCount
+                    let totalVisits = visits.count
                     Task {
                         try? await Task.sleep(nanoseconds: 3_200_000_000)
                         withAnimation { celebrationCount = nil }
+                        // A *return* scan that found new visits = a genuine delight moment. Ask after the
+                        // celebration clears, never on the first scan. (Only shows on App Store builds.)
+                        if !wasFirstScan {
+                            RatingPrompt.maybePrompt(newVisits: newVisits, totalVisits: totalVisits)
+                        }
                     }
                 }
             }
