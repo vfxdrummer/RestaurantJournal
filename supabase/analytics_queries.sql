@@ -104,6 +104,51 @@ from (
 order by day;
 
 
+-- === RETENTION: per-install (best read at low volume — eyeball all your users) ===
+-- active_days > 1 means that install came back on another day. This is the honest early metric.
+select install_id,
+       min(created_at)::date              as first_seen,
+       max(created_at)::date              as last_seen,
+       count(distinct created_at::date)   as active_days,
+       count(*)                           as opens
+from events
+where name = 'app_open'
+group by 1
+order by first_seen desc, active_days desc;
+
+
+-- === RETENTION: Day-1 / Day-7 cohorts (meaningful once volume grows) ===
+with firsts as (
+  select install_id, min(created_at)::date as cohort_day
+  from events where name = 'app_open' group by install_id
+),
+active as (
+  select distinct install_id, created_at::date as day
+  from events where name = 'app_open'
+)
+select f.cohort_day,
+       count(distinct f.install_id)                                                          as installs,
+       count(distinct case when a.day = f.cohort_day + 1 then f.install_id end)               as returned_d1,
+       count(distinct case when a.day between f.cohort_day + 1 and f.cohort_day + 7
+                            then f.install_id end)                                            as returned_within_7d,
+       round(100.0 * count(distinct case when a.day between f.cohort_day + 1 and f.cohort_day + 7
+                            then f.install_id end) / nullif(count(distinct f.install_id), 0), 0) as d7_pct
+from firsts f
+join active a using (install_id)
+group by f.cohort_day
+order by f.cohort_day desc;
+
+
+-- === ACTIVATION: did new installs reach the "aha"? (the real early question) ===
+-- Of installs that opened the app, how many created a visit and how many got a repeat dining visit.
+select
+  count(distinct install_id) filter (where name = 'app_open')                                as installs,
+  count(distinct install_id) filter (where name = 'visit_created')                           as created_a_visit,
+  count(distinct install_id) filter (where name = 'visit_created'
+        and (props->>'is_repeat')::boolean)                                                  as got_a_repeat_visit
+from events;
+
+
 -- === VISITS PER BRAND (chains vs "Independent") ===
 select props->>'brand' as brand, count(*) as visits
 from events
