@@ -154,6 +154,14 @@ actor ScanEngine {
         let scannedPhotoCount = total
         await report(snapshot())
 
+        // Fires at the *start* of a real scan (unlike scan_completed, which only fires at the end and
+        // is missed when a user closes the app mid-scan). Gives an interruption-proof "photos queued
+        // to scan" metric, and scan_completed ÷ scan_started = the scan completion rate.
+        Analytics.log("scan_started", [
+            "photos_to_scan": total,
+            "full_rescan": doFull,
+        ])
+
         // Two concurrent stages that interleave on the engine's executor (off the main thread):
         // screening produces dining clusters; matching consumes them.
         async let screening: Void = screenLoop(control: control, report: report)

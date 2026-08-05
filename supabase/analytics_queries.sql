@@ -20,6 +20,22 @@ select count(*) as total_visits_created
 from events where name = 'visit_created';
 
 
+-- === PHOTOS QUEUED TO SCAN (interruption-proof — fires at scan start) ===
+-- Use this instead of scan_completed's photos_scanned, which is missed when users quit mid-scan.
+select coalesce(sum((props->>'photos_to_scan')::int), 0) as total_photos_queued
+from events where name = 'scan_started';
+
+
+-- === SCAN COMPLETION RATE (do people finish their scans?) ===
+-- Low completion = big first scans may feel too long, or users bail once visits appear.
+select
+  count(*) filter (where name = 'scan_started')     as scans_started,
+  count(*) filter (where name = 'scan_completed')   as scans_completed,
+  round(100.0 * count(*) filter (where name = 'scan_completed')
+        / nullif(count(*) filter (where name = 'scan_started'), 0), 0) as completion_pct
+from events;
+
+
 -- === REPEAT DINING VISITS (north-star: habitual, not one-and-done) ===
 select
   count(*) filter (where (props->>'is_repeat')::boolean)                as repeat_visits,
