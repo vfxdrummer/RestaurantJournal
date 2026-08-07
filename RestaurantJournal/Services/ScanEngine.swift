@@ -116,26 +116,53 @@ actor ScanEngine {
         // strand every genuinely-new photo in the "already-covered" gap (the "it missed tonight's
         // visit while backfilling 2020" bug). The imported frontier is real dining data and can't be
         // poisoned that way. A window exists once we have any imports OR a saved coverage begin.
-        let newFrontier = newestImportedDate()
-        let hasWindow = newFrontier != nil || coverage.begin != nil
         let newAssets: [PHAsset]
-        if let newFrontier {
-            newAssets = PhotoClusteringService.fetchAssets(after: newFrontier)
-                .filter { !importedIDs.contains($0.localIdentifier) }
-        } else {
-            newAssets = []
-        }
-
         let backfillAssets: [PHAsset]
-        if !hasWindow {
-            // Truly first scan (no imports, no window): the whole library is the backfill.
-            backfillAssets = PhotoClusteringService.fetchAssets()
-                .filter { !importedIDs.contains($0.localIdentifier) }
-        } else if !coverage.fullSweepComplete, let end = coverage.end {
-            backfillAssets = PhotoClusteringService.fetchAssets(before: end)
-                .filter { !importedIDs.contains($0.localIdentifier) }
-        } else {
+
+        if PHPhotoLibrary.authorizationStatus(for: .readWrite) == .limited {
+            // Limited access is a different world and gets its own selection strategy. The visible
+            // library is a small, hand-picked set the user can grow at any time — and through channels
+            // we can't observe (our in-app picker, the system picker, or Settings). A date-based
+            // frontier can't be trusted to notice an *older* photo appearing, so we don't use one.
+            // Instead we lean entirely on per-photo history: scan every visible photo we haven't
+            // already handled. The set is small and already-screened photos are cache hits (no
+            // re-Vision), so this is cheap even run every time — and the unscanned photos are exactly
+            // the newly added ones, so they get picked up on the very next scan, whatever channel they
+            // came from. A full rescan re-screens negatives too (ignores the cache), matching intent.
+            let visible = PhotoClusteringService.fetchAssets()
+            newAssets = visible.filter { asset in
+                let id = asset.localIdentifier
+                if importedIDs.contains(id) || dismissedIds.contains(id) { return false }
+                if doFull { return true }
+                // Skip photos already screened as non-dining at the current classifier version (they'd
+                // be cache-skipped anyway); keep everything else, including cached dining photos not yet
+                // imported so matching can retry, and stale-version negatives so a new classifier re-runs.
+                if let record = screenCache[id], !record.isDining, record.screenerVersion >= classifierVersion {
+                    return false
+                }
+                return true
+            }
             backfillAssets = []
+        } else {
+            let newFrontier = newestImportedDate()
+            let hasWindow = newFrontier != nil || coverage.begin != nil
+            if let newFrontier {
+                newAssets = PhotoClusteringService.fetchAssets(after: newFrontier)
+                    .filter { !importedIDs.contains($0.localIdentifier) }
+            } else {
+                newAssets = []
+            }
+
+            if !hasWindow {
+                // Truly first scan (no imports, no window): the whole library is the backfill.
+                backfillAssets = PhotoClusteringService.fetchAssets()
+                    .filter { !importedIDs.contains($0.localIdentifier) }
+            } else if !coverage.fullSweepComplete, let end = coverage.end {
+                backfillAssets = PhotoClusteringService.fetchAssets(before: end)
+                    .filter { !importedIDs.contains($0.localIdentifier) }
+            } else {
+                backfillAssets = []
+            }
         }
 
         // `cluster` returns clusters oldest-first; reverse so each pass is processed newest-first.

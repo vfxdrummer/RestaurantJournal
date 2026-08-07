@@ -67,7 +67,9 @@
     <key>ITSAppUsesNonExemptEncryption</key>
     <false/>
     <key>NSPhotoLibraryUsageDescription</key>
-    <string>Restaurant Journal scans your photo library to detect restaurant visits from your food photos.</string>
+    <string>Restaurant Journal analyzes your photos on this device to detect restaurant visits from where and when they were taken. Your photos are never uploaded.</string>
+    <key>PHPhotoLibraryPreventAutomaticLimitedAccessAlert</key>
+    <true/>
     <key>NSLocationWhenInUseUsageDescription</key>
     <string>Restaurant Journal uses your location to center the map on where you've dined.</string>
     <key>NSMicrophoneUsageDescription</key>

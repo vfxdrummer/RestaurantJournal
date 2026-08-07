@@ -112,9 +112,11 @@ struct JournalListView: View {
             VStack(spacing: 0) {
                 if visits.isEmpty {
                     // First run: one clear, branded call to action — no top bar to compete with it.
-                    JournalWelcomeView(scanner: scanner) {
-                        Task { await scanner.scan(in: modelContext) }
-                    }
+                    JournalWelcomeView(
+                        scanner: scanner,
+                        onScan: { Task { await scanner.scan(in: modelContext) } },
+                        onFullRescan: { Task { await scanner.scan(in: modelContext, fullRescan: true) } }
+                    )
                 } else {
                     switch viewMode {
                     case .list:

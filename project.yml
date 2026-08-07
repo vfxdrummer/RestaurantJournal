@@ -23,8 +23,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.vfxdrummer.RestaurantJournal
         PRODUCT_NAME: RestaurantJournal
-        MARKETING_VERSION: "1.2"
-        CURRENT_PROJECT_VERSION: "18"
+        MARKETING_VERSION: "1.3"
+        CURRENT_PROJECT_VERSION: "19"
         IPHONEOS_DEPLOYMENT_TARGET: "17.0"
         TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: NO

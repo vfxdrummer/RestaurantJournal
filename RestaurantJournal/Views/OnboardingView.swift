@@ -109,10 +109,10 @@ struct OnboardingView: View {
             VStack(spacing: 12) {
                 Text("Private by design")
                     .font(.title.weight(.bold))
-                Text("All scanning happens right on your device — your photos never leave your phone.")
+                Text("Restaurant Journal analyzes your photos right on your device to find where you've dined — your photos never leave your phone.")
                     .font(.body)
                     .foregroundStyle(.secondary)
-                Text("Next, we'll ask for photo access so we can find your visits.")
+                Text("Next, iOS will ask for photo access. Full access finds every visit automatically. Limited access works too — you pick which photos to include, and can add more anytime.")
                     .font(.subheadline)
                     .foregroundStyle(.tertiary)
             }

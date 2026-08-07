@@ -1,4 +1,5 @@
 import SwiftUI
+import Photos
 
 /// Scan trigger + live progress with pause/resume, driven by an observable `VisitDiscoveryService`.
 /// Screening photos and matching places run concurrently, so each gets its own progress bar.
@@ -12,6 +13,10 @@ struct ScanStatusView: View {
 
     /// Observed so the throttle message appears/disappears live.
     @State private var geo = GeoLookupCoordinator.shared
+    /// Photo authorization, refreshed on appear and when returning from Settings, so the
+    /// limited-access banner shows/hides live.
+    @State private var authStatus = PhotoLibraryAccess.status
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         VStack(spacing: 10) {
@@ -87,9 +92,19 @@ struct ScanStatusView: View {
                         .font(.caption)
                         .foregroundStyle(.red)
                 }
+
+                if authStatus == .limited {
+                    // Adding photos triggers a *full* rescan: newly selected photos can predate the
+                    // incremental window, so an incremental pass would miss them.
+                    LimitedAccessBanner { onScan(true) }
+                }
             }
         }
         .padding()
+        .onAppear { authStatus = PhotoLibraryAccess.status }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { authStatus = PhotoLibraryAccess.status }
+        }
     }
 
     @ViewBuilder

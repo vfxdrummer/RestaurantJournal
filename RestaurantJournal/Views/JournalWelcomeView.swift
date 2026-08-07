@@ -5,6 +5,9 @@ import SwiftUI
 struct JournalWelcomeView: View {
     let scanner: VisitDiscoveryService
     let onScan: () -> Void
+    /// Full rescan, triggered after a limited-access user adds more photos (they can predate the
+    /// incremental window). Optional so existing call sites without limited handling still compile.
+    var onFullRescan: () -> Void = {}
 
     var body: some View {
         VStack(spacing: 22) {
@@ -55,6 +58,13 @@ struct JournalWelcomeView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
+            }
+
+            // A limited-access user who scanned and got nothing back would otherwise dead-end here.
+            // Give them the escape hatch: add more photos (or go full access) and rescan.
+            if scanner.phase == .finished, !scanner.isBusy, PhotoLibraryAccess.isLimited {
+                LimitedAccessBanner { onFullRescan() }
+                    .padding(.horizontal, 24)
             }
             if let error = scanner.errorMessage {
                 Text(error)
