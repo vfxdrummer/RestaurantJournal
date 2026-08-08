@@ -1,4 +1,7 @@
 import Photos
+import PhotosUI   // presentLimitedLibraryPicker(from:completionHandler:) is a PhotosUI category on
+                 // PHPhotoLibrary — without importing (and thus autolinking) PhotosUI, the selector
+                 // isn't registered at runtime and tapping "Add more photos" crashes.
 import UIKit
 
 /// Thin wrapper over the photo-library authorization state, plus the two limited-access affordances
